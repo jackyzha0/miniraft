@@ -1,6 +1,7 @@
-use crate::log::{LogEntry, LogIndex};
+use crate::log::{Log, LogEntry, LogIndex};
 use crate::server::{RaftServer, ServerId, Term};
 
+/// A Raft RPC request
 #[derive(Debug)]
 pub enum RPC<T> {
     VoteRequest(VoteRequest),
@@ -40,7 +41,9 @@ pub struct AppendRequest<T> {
     pub leader_id: ServerId,
     /// Log index immediately preceding index of first element in [`entries`](Self::entries)
     pub prev_entries_idx: LogIndex,
+    /// Term of [`prev_entries_idx`](Self::prev_entries_idx)
     pub prev_entries_term: Term,
+    /// Leader's [`commit_idx`](Log::commit_idx)
     pub leader_commit: LogIndex,
     /// A list of consecutive log entries to append to follower
     pub entries: Vec<LogEntry<T>>,
@@ -50,6 +53,4 @@ pub struct AppendRequest<T> {
 #[derive(Debug)]
 pub struct AppendResponse {
     pub ok: bool,
-    pub match_idx: LogIndex,
-    pub last_log_idx: LogIndex,
 }
