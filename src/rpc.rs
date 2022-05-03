@@ -1,5 +1,5 @@
 use crate::log::{LogEntry, LogIndex};
-use crate::server::{ServerId, Term};
+use crate::server::{RaftServer, ServerId, Term};
 
 #[derive(Debug)]
 pub enum RPC<T> {
@@ -25,7 +25,7 @@ pub struct VoteRequest {
 /// Response to a [`VoteRequest`]
 #[derive(Debug)]
 pub struct VoteResponse {
-    /// [`currentTerm`] of server for candidate to update itself
+    /// [`current_term`](RaftServer::current_term) of server for candidate to update itself
     pub term: Term,
     /// Whether the [`VoteRequest`] was granted or not
     pub vote_granted: bool,
@@ -48,4 +48,8 @@ pub struct AppendRequest<T> {
 
 /// Response to an [`AppendRequest`]
 #[derive(Debug)]
-pub struct AppendResponse {}
+pub struct AppendResponse {
+    pub ok: bool,
+    pub match_idx: LogIndex,
+    pub last_log_idx: LogIndex,
+}

@@ -5,29 +5,46 @@ use std::{
 
 use crate::log::{Log, LogIndex};
 
+/// Type alias for Raft leadership term
 pub type Term = u64;
+
+/// Type alias for the ID of a single Raft server
 pub type ServerId = u64;
 
+/// Configuration options for a Raft server
 #[derive(Debug)]
 pub struct RaftConfig {
+    /// How long a server should wait for a message from
+    /// current leader before giving up and starting an election
     pub election_timeout: Duration,
+
+    /// How often a leader should send empty 'heartbeat' AppendEntry RPC
+    /// calls to maintain power
     pub heartbeat_interval: Duration,
-    pub replication_chunk_size: usize,
 }
 
 #[derive(Debug)]
-pub struct RaftNode<T> {
-    /// Static State
-    id: ServerId,
-    peers: BTreeSet<ServerId>,
-    config: RaftConfig,
+pub struct RaftServer<T> {
+    // Static State
+    /// ID of this node
+    pub id: ServerId,
+    /// All other servers in this Raft cluster
+    pub peers: BTreeSet<ServerId>,
+    /// Config of this node
+    pub config: RaftConfig,
 
-    /// Persistent State
-    current_term: Term,
+    // Persistent State
+    /// Current term of this node
+    pub current_term: Term,
+    /// Candidate node that we voted for this election
     voted_for: Option<ServerId>,
+    /// List of log entries for this node.
+    /// This is the data that is being replicated
     log: Log<T>,
 
-    /// Volatile State
+    // Volatile State
+    /// State of the node that depends on its leadership status
+    /// (one of [`FollowerState`], [`CandidateState`], or [`LeaderState`])
     leadership_state: RaftLeadershipState,
 }
 
