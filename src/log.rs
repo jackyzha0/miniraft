@@ -28,4 +28,12 @@ pub struct Log<T> {
     pub last_applied: LogIndex,
 }
 
-impl<T> Log<T> {}
+impl<T> Log<T> {
+    pub fn new() -> Self {
+        Log {
+            entries: VecDeque::new(),
+            commit_idx: 0,
+            last_applied: 0,
+        }
+    }
+}
