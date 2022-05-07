@@ -1,7 +1,11 @@
-use crate::log::{Log, LogIndex};
+use crate::{
+    log::{Log, LogIndex},
+    rpc::RPC,
+    transport::TransportMedium,
+};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
-use rand_core::{RngCore, SeedableRng};
+use rand_core::SeedableRng;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Type alias for Raft leadership term
@@ -78,8 +82,7 @@ pub struct NodeReplicationState {
 }
 
 /// A Raft server that replicates Logs of type `T`
-#[derive(Debug)]
-pub struct RaftServer<T> {
+pub struct RaftServer<'s, T> {
     // Static State
     /// ID of this node
     id: ServerId,
@@ -103,35 +106,94 @@ pub struct RaftServer<T> {
 
     /// Internal seeded random number generator
     rng: ChaCha8Rng,
+
+    /// Underlying message medium
+    transport_layer: &'s dyn TransportMedium<T>,
 }
 
-impl<T> RaftServer<T> {
-    fn new(id: ServerId, peers: BTreeSet<ServerId>, cfg: RaftConfig, seed: Option<u64>) -> Self {
+impl<'s, T> RaftServer<'s, T> {
+    pub fn new(
+        id: ServerId,
+        peers: BTreeSet<ServerId>,
+        config: RaftConfig,
+        seed: Option<u64>,
+        transport_layer: &'s dyn TransportMedium<T>,
+    ) -> Self {
         // Create RNG generator from seed if it exists, otherwise seed from system entropy
         let mut rng = match seed {
             Some(n) => ChaCha8Rng::seed_from_u64(n),
             None => ChaCha8Rng::from_entropy(),
         };
 
-        // Set ranomd election time
-        let random_election_time =
-            rng_jitter(&mut rng, cfg.election_timeout, cfg.election_timeout_jitter);
+        // Set random election time
+        let random_election_time = rng_jitter(
+            &mut rng,
+            config.election_timeout,
+            config.election_timeout_jitter,
+        );
 
         // Initialize state, set leadership state to follower
         RaftServer {
             id,
             peers,
-            config: cfg,
+            config,
             current_term: 0,
             voted_for: None,
             log: Log::new(),
             rng,
+            transport_layer,
             leadership_state: RaftLeadershipState::Follower(FollowerState {
                 leader: None,
                 election_time: random_election_time,
             }),
         }
     }
+
+    fn random_election_time(&mut self) -> Ticks {
+        rng_jitter(
+            &mut self.rng,
+            self.config.election_timeout,
+            self.config.election_timeout_jitter,
+        )
+    }
+
+    pub fn tick(&mut self) -> &mut Self {
+        use RaftLeadershipState::*;
+        match &mut self.leadership_state {
+            Follower(state) => {
+                state.election_time = state.election_time.saturating_sub(1);
+
+                // suspect leader has failed, election timeout reached
+                // attempt to become candidate
+                if state.election_time == 0 {
+                    // vote for self
+                    self.voted_for = Some(self.id);
+                    let mut vote_list = BTreeSet::new();
+                    vote_list.insert(self.id);
+
+                    // set state to candidate
+                    self.leadership_state = Candidate(CandidateState {
+                        election_time: self.random_election_time(),
+                        votes_received: vote_list,
+                    });
+
+                    // determine what the last term was
+                    let last_term = if self.log.entries.len() > 0 {
+                        self.log.entries.back().unwrap().term
+                    } else {
+                        0
+                    };
+
+                    // broadcast message to all nodes asking for a vote
+                }
+            }
+            Candidate(state) => {}
+            Leader(state) => {}
+        }
+        self
+    }
+
+    pub fn receive_rpc(&self, rpc: &RPC<T>) {}
 }
 
 /// Returns a random u32 uniformly from (expected)

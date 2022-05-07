@@ -1,5 +1,13 @@
-use crate::log::{Log, LogEntry, LogIndex};
-use crate::server::{RaftServer, ServerId, Term};
+use crate::log::{LogEntry, LogIndex};
+use crate::server::{ServerId, Term};
+
+pub type Message<T> = (Target, RPC<T>);
+
+/// A message can be either targeted at a single server or to everyone
+pub enum Target {
+    Single(ServerId),
+    Broadcast,
+}
 
 /// A Raft RPC request
 #[derive(Debug)]

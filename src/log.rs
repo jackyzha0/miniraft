@@ -18,7 +18,7 @@ pub struct LogEntry<T> {
 /// A collection of LogEntries
 #[derive(Debug)]
 pub struct Log<T> {
-    entries: VecDeque<LogEntry<T>>,
+    pub entries: VecDeque<LogEntry<T>>,
 
     /// Index of highest log entry known to be commited.
     /// Initialized to 0, increases monotonically.
