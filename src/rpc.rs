@@ -1,9 +1,10 @@
 use crate::log::{LogEntry, LogIndex};
 use crate::server::{ServerId, Term};
 
+/// A message can be either targeted at a single server or to everyone
 pub type SendableMessage<T> = (Target, RPC<T>);
 
-/// A message can be either targeted at a single server or to everyone
+/// Whether to send a message to everyone or just a single node
 pub enum Target {
     Single(ServerId),
     Broadcast,
@@ -19,7 +20,6 @@ pub enum RPC<T> {
 }
 
 /// Request by a candidate to become a Raft leader
-#[derive(Debug)]
 pub struct VoteRequest {
     /// Current term of candidate
     pub candidate_term: Term,
@@ -32,7 +32,6 @@ pub struct VoteRequest {
 }
 
 /// Response to a [`VoteRequest`]
-#[derive(Debug)]
 pub struct VoteResponse {
     /// [`current_term`](RaftServer::current_term) of server for candidate to update itself
     pub term: Term,
@@ -43,7 +42,6 @@ pub struct VoteResponse {
 }
 
 /// Request from leader to append entries to follower's log
-#[derive(Debug)]
 pub struct AppendRequest<T> {
     /// Term of leader requesting log append
     pub leader_term: Term,
@@ -60,7 +58,6 @@ pub struct AppendRequest<T> {
 }
 
 /// Response to an [`AppendRequest`]
-#[derive(Debug)]
 pub struct AppendResponse {
     pub ok: bool,
 }

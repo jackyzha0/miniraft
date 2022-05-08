@@ -21,6 +21,7 @@ pub struct Log<T> {
     pub entries: VecDeque<LogEntry<T>>,
 
     /// Index of highest log entry known to be commited.
+    /// A log entry is considered 'safely replicated' or committed once it is replicated on a majority of servers.
     /// Initialized to 0, increases monotonically.
     pub commit_idx: LogIndex,
     /// Index of highest log entry applied to state machine.

@@ -218,6 +218,7 @@ where
         self
     }
 
+    /// Helper function to reset current state back to follower if we are behind
     fn reset_to_follower(&mut self, new_term: Term) {
         self.current_term = new_term;
         self.voted_for = None;
