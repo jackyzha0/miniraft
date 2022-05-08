@@ -3,20 +3,23 @@ use std::collections::BTreeMap;
 use anyhow::{Error, Result};
 
 use crate::{
-    rpc::{Message, Target},
+    rpc::{SendableMessage, Target},
     server::{RaftServer, ServerId},
 };
 
 pub trait TransportMedium<T> {
-    fn send(&mut self, msg: &Message<T>) -> Result<()>;
+    fn send(&mut self, msg: &SendableMessage<T>) -> Result<()>;
 }
 
 pub struct ReliableTransport<'t, T> {
     peers: BTreeMap<ServerId, &'t mut RaftServer<'t, T>>,
 }
 
-impl<'t, T> TransportMedium<T> for ReliableTransport<'t, T> {
-    fn send(&mut self, msg: &Message<T>) -> Result<()> {
+impl<'t, T> TransportMedium<T> for ReliableTransport<'t, T>
+where
+    T: Clone,
+{
+    fn send(&mut self, msg: &SendableMessage<T>) -> Result<()> {
         match msg {
             (Target::Single(target), rpc) => {
                 // get target peer, return an error if its not found

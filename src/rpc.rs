@@ -1,7 +1,7 @@
 use crate::log::{LogEntry, LogIndex};
 use crate::server::{ServerId, Term};
 
-pub type Message<T> = (Target, RPC<T>);
+pub type SendableMessage<T> = (Target, RPC<T>);
 
 /// A message can be either targeted at a single server or to everyone
 pub enum Target {
@@ -14,10 +14,6 @@ pub enum Target {
 pub enum RPC<T> {
     VoteRequest(VoteRequest),
     AppendRequest(AppendRequest<T>),
-}
-
-#[derive(Debug)]
-pub enum RPCResponse {
     VoteResponse(VoteResponse),
     AppendResponse(AppendResponse),
 }
@@ -42,6 +38,8 @@ pub struct VoteResponse {
     pub term: Term,
     /// Whether the [`VoteRequest`] was granted or not
     pub vote_granted: bool,
+    /// Who sent the vote
+    pub votee_id: ServerId,
 }
 
 /// Request from leader to append entries to follower's log
@@ -51,10 +49,10 @@ pub struct AppendRequest<T> {
     pub leader_term: Term,
     /// ID of leader (used so follower can redirect clients)
     pub leader_id: ServerId,
-    /// Log index immediately preceding index of first element in [`entries`](Self::entries)
-    pub prev_entries_idx: LogIndex,
-    /// Term of [`prev_entries_idx`](Self::prev_entries_idx)
-    pub prev_entries_term: Term,
+    /// Log index immediately preceding index of next element in [`entries`](Self::entries)
+    pub leader_last_log_idx: LogIndex,
+    /// Term of [`leader_last_log_idx`](Self::prev_entries_idx)
+    pub leader_last_log_term: Term,
     /// Leader's [`commit_idx`](Log::commit_idx)
     pub leader_commit: LogIndex,
     /// A list of consecutive log entries to append to follower

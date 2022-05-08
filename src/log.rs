@@ -46,4 +46,13 @@ impl<T> Log<T> {
             0
         }
     }
+
+    /// Get index of the last element
+    pub fn last_idx(&self) -> LogIndex {
+        if self.entries.len() > 0 {
+            self.entries.len() - 1
+        } else {
+            0
+        }
+    }
 }

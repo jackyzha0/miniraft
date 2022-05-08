@@ -1,13 +1,15 @@
 use crate::{
     log::{Log, LogIndex},
-    rpc::{Target, VoteRequest, RPC},
+    rpc::{AppendRequest, Target, VoteRequest, VoteResponse, RPC},
     transport::TransportMedium,
 };
-use anyhow::Result;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Div,
+};
 
 /// Type alias for Raft leadership term
 pub type Term = u64;
@@ -46,6 +48,18 @@ pub enum RaftLeadershipState {
     Leader(LeaderState),
 }
 
+impl PartialEq for RaftLeadershipState {
+    fn eq(&self, other: &Self) -> bool {
+        use RaftLeadershipState::*;
+        match (self, other) {
+            (Follower(_), Follower(_)) => true,
+            (Candidate(_), Candidate(_)) => true,
+            (Leader(_), Leader(_)) => true,
+            (_, _) => false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct FollowerState {
     /// Current leader node is following
@@ -75,11 +89,11 @@ pub struct LeaderState {
 pub struct NodeReplicationState {
     /// Index of next log entry to send to that server.
     /// Initialized to leader's last log index + 1
-    pub next_idx: LogIndex,
+    pub sent_up_to: LogIndex,
 
     /// Index of highest log entry known to be replicated on server.
     /// Initialized to 0, increases monotonically
-    pub match_idx: LogIndex,
+    pub acked_up_to: LogIndex,
 }
 
 /// A Raft server that replicates Logs of type `T`
@@ -112,7 +126,10 @@ pub struct RaftServer<'s, T> {
     transport_layer: &'s mut dyn TransportMedium<T>,
 }
 
-impl<'s, T> RaftServer<'s, T> {
+impl<'s, T> RaftServer<'s, T>
+where
+    T: Clone,
+{
     pub fn new(
         id: ServerId,
         peers: BTreeSet<ServerId>,
@@ -184,13 +201,11 @@ impl<'s, T> RaftServer<'s, T> {
                     let rpc = RPC::VoteRequest(VoteRequest {
                         candidate_term: self.current_term,
                         candidate_id: self.id,
-                        candidate_last_log_idx: self.log.entries.len(),
+                        candidate_last_log_idx: self.log.last_idx(),
                         candidate_last_log_term: self.log.last_term(),
                     });
                     let msg = (Target::Broadcast, rpc);
-                    self.transport_layer
-                        .send(&msg)
-                        .expect("invalid recipient server")
+                    self.transport_layer.send(&msg).unwrap()
                 }
             }
             Candidate(state) => {
@@ -203,24 +218,125 @@ impl<'s, T> RaftServer<'s, T> {
         self
     }
 
+    fn reset_to_follower(&mut self, new_term: Term) {
+        self.current_term = new_term;
+        self.voted_for = None;
+        self.leadership_state = RaftLeadershipState::Follower(FollowerState {
+            leader: None, // as we are in an election
+            election_time: self.random_election_time(),
+        })
+    }
+
+    /// Calculate quorum of current set of peers.
+    /// quorum = ceil((peers.length + 1)/2)
+    fn quorum_size(&self) -> usize {
+        // add an extra because self.peers doesn't include self
+        self.peers.len().saturating_add(2).div(2)
+    }
+
     pub fn receive_rpc(&mut self, rpc: &RPC<T>) {
+        use RaftLeadershipState::*;
         match rpc {
             RPC::VoteRequest(req) => {
                 if req.candidate_term > self.current_term {
-                    // we are out of date!
-                    // set candidate back to follower state and bump current term
-                    self.current_term = req.candidate_term;
-                    self.voted_for = None;
-                    self.leadership_state = RaftLeadershipState::Follower(FollowerState {
-                        leader: None, // as we are in an election
-                        election_time: self.random_election_time(),
-                    })
+                    // if we are behind the other candidate, just reset to follower
+                    self.reset_to_follower(req.candidate_term);
                 }
 
                 // check if candidate's log is up to date with ours
                 // if they are outdated, don't vote for them (we don't want an outdated leader)
+                let candidate_has_more_recent_log =
+                    req.candidate_last_log_term > self.log.last_term();
+                let candidate_has_longer_log = req.candidate_last_log_term == self.log.last_term()
+                    && req.candidate_last_log_idx >= self.log.last_idx();
+                let log_ok = candidate_has_more_recent_log || candidate_has_longer_log;
+
+                // check to see if candidate's term is up to date with ours
+                let up_to_date = req.candidate_term == self.current_term;
+
+                // check to make sure we haven't voted yet (or we've already voted for them to make this idempotent)
+                let havent_voted_for_them = match self.voted_for {
+                    Some(voted_candidate_id) => voted_candidate_id == req.candidate_id,
+                    None => true,
+                };
+
+                // construct a response depending on conditions
+                let vote_granted = if log_ok && up_to_date && havent_voted_for_them {
+                    // all conditions met! vote for them
+                    self.voted_for = Some(req.candidate_id);
+                    true
+                } else {
+                    false
+                };
+                let rpc = RPC::VoteResponse(VoteResponse {
+                    votee_id: self.id,
+                    term: self.current_term,
+                    vote_granted,
+                });
+                let msg = (Target::Single(req.candidate_id), rpc);
+                self.transport_layer.send(&msg).unwrap()
+            }
+            RPC::VoteResponse(res) => {
+                if res.term > self.current_term {
+                    // if votee is ahead, we are out of date, reset to follower
+                    self.reset_to_follower(res.term);
+                }
+
+                let quorum = self.quorum_size();
+                match &mut self.leadership_state {
+                    Candidate(state) => {
+                        let up_to_date = res.term == self.current_term;
+                        // only process the vote if we are a candidate, the votee is voting for
+                        // our current term, and the vote was positive
+                        if up_to_date && res.vote_granted {
+                            // add this to votes received
+                            state.votes_received.insert(res.votee_id);
+
+                            // check if we've hit quorum
+                            if state.votes_received.len() >= quorum {
+                                // success! promote self to leader
+                                let mut followers = BTreeMap::new();
+
+                                // initialize followers to all nodes who voted for us
+                                // then replicate our logs to them
+                                state.votes_received.iter().for_each(|votee| {
+                                    // add that votee to our list of followers
+                                    followers.insert(
+                                        *votee,
+                                        NodeReplicationState {
+                                            sent_up_to: self.log.last_idx() + 1,
+                                            acked_up_to: 0,
+                                        },
+                                    );
+
+                                    // replicate our log with each follower
+                                    let rpc = RPC::AppendRequest(AppendRequest {
+                                        entries: self.log.entries.clone().into(),
+                                        leader_id: self.id,
+                                        leader_term: self.current_term,
+                                        leader_commit: self.log.commit_idx,
+                                        leader_last_log_idx: self.log.last_idx(),
+                                        leader_last_log_term: self.log.last_term(),
+                                    });
+                                    let msg = (Target::Single(*votee), rpc);
+                                    self.transport_layer.send(&msg).unwrap();
+                                });
+
+                                // setup done, set state to leader
+                                self.leadership_state = Leader(LeaderState {
+                                    followers,
+                                    heartbeat_timeout: self.config.heartbeat_interval,
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
             RPC::AppendRequest(req) => {
+                // TODO: stub
+            }
+            RPC::AppendResponse(res) => {
                 // TODO: stub
             }
         }
