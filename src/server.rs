@@ -1,8 +1,9 @@
 use crate::{
     log::{Log, LogIndex},
-    rpc::RPC,
+    rpc::{Target, VoteRequest, RPC},
     transport::TransportMedium,
 };
+use anyhow::Result;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
@@ -108,7 +109,7 @@ pub struct RaftServer<'s, T> {
     rng: ChaCha8Rng,
 
     /// Underlying message medium
-    transport_layer: &'s dyn TransportMedium<T>,
+    transport_layer: &'s mut dyn TransportMedium<T>,
 }
 
 impl<'s, T> RaftServer<'s, T> {
@@ -117,7 +118,7 @@ impl<'s, T> RaftServer<'s, T> {
         peers: BTreeSet<ServerId>,
         config: RaftConfig,
         seed: Option<u64>,
-        transport_layer: &'s dyn TransportMedium<T>,
+        transport_layer: &'s mut dyn TransportMedium<T>,
     ) -> Self {
         // Create RNG generator from seed if it exists, otherwise seed from system entropy
         let mut rng = match seed {
@@ -157,7 +158,7 @@ impl<'s, T> RaftServer<'s, T> {
         )
     }
 
-    pub fn tick(&mut self) -> &mut Self {
+    pub fn tick(&mut self) -> Result<()> {
         use RaftLeadershipState::*;
         match &mut self.leadership_state {
             Follower(state) => {
@@ -185,15 +186,33 @@ impl<'s, T> RaftServer<'s, T> {
                     };
 
                     // broadcast message to all nodes asking for a vote
+                    let rpc = RPC::VoteRequest(VoteRequest {
+                        candidate_term: self.current_term,
+                        candidate_id: self.id,
+                        candidate_last_log_idx: self.log.entries.len(),
+                        candidate_last_log_term: last_term,
+                    });
+                    let msg = (Target::Broadcast, rpc);
+                    self.transport_layer.send(&msg)
+                } else {
+                    // nothing happened, just ticked the clock
+                    Ok(())
                 }
             }
-            Candidate(state) => {}
-            Leader(state) => {}
+            Candidate(state) => {
+                // TODO: stub
+                Ok(())
+            }
+            Leader(state) => {
+                // TODO: stub
+                Ok(())
+            }
         }
-        self
     }
 
-    pub fn receive_rpc(&self, rpc: &RPC<T>) {}
+    pub fn receive_rpc(&self, rpc: &RPC<T>) {
+        // TODO: stub
+    }
 }
 
 /// Returns a random u32 uniformly from (expected)

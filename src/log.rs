@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use crate::server::Term;
 
 /// Type alias for indexing into the [`Log`]
-pub type LogIndex = u64;
+pub type LogIndex = usize;
 
 /// A single log entry
 #[derive(Clone, Debug)]
