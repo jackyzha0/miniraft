@@ -13,8 +13,12 @@ pub enum Target {
 #[derive(Debug)]
 pub enum RPC<T> {
     VoteRequest(VoteRequest),
-    VoteResponse(VoteResponse),
     AppendRequest(AppendRequest<T>),
+}
+
+#[derive(Debug)]
+pub enum RPCResponse {
+    VoteResponse(VoteResponse),
     AppendResponse(AppendResponse),
 }
 

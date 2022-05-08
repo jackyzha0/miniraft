@@ -12,7 +12,7 @@ pub trait TransportMedium<T> {
 }
 
 pub struct ReliableTransport<'t, T> {
-    peers: BTreeMap<ServerId, &'t RaftServer<'t, T>>,
+    peers: BTreeMap<ServerId, &'t mut RaftServer<'t, T>>,
 }
 
 impl<'t, T> TransportMedium<T> for ReliableTransport<'t, T> {
@@ -20,16 +20,18 @@ impl<'t, T> TransportMedium<T> for ReliableTransport<'t, T> {
         match msg {
             (Target::Single(target), rpc) => {
                 // get target peer, return an error if its not found
-                let peer = *self
+                let peer = self
                     .peers
-                    .get(&target)
+                    .get_mut(&target)
                     .ok_or(Error::msg("peer not found"))?;
                 peer.receive_rpc(rpc);
                 Ok(())
             }
             (Target::Broadcast, rpc) => {
                 // broadcast this message to all peers
-                self.peers.values().for_each(|peer| peer.receive_rpc(rpc));
+                self.peers
+                    .values_mut()
+                    .for_each(|peer| peer.receive_rpc(rpc));
                 Ok(())
             }
         }

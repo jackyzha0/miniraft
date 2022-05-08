@@ -150,6 +150,7 @@ impl<'s, T> RaftServer<'s, T> {
         }
     }
 
+    /// Helper function to generate a random election time given current configuration
     fn random_election_time(&mut self) -> Ticks {
         rng_jitter(
             &mut self.rng,
@@ -158,7 +159,8 @@ impl<'s, T> RaftServer<'s, T> {
         )
     }
 
-    pub fn tick(&mut self) -> Result<()> {
+    /// Tick state and perform necessary state transitions/RPC calls
+    pub fn tick(&mut self) -> &mut Self {
         use RaftLeadershipState::*;
         match &mut self.leadership_state {
             Follower(state) => {
@@ -178,40 +180,50 @@ impl<'s, T> RaftServer<'s, T> {
                         votes_received: vote_list,
                     });
 
-                    // determine what the last term was
-                    let last_term = if self.log.entries.len() > 0 {
-                        self.log.entries.back().unwrap().term
-                    } else {
-                        0
-                    };
-
                     // broadcast message to all nodes asking for a vote
                     let rpc = RPC::VoteRequest(VoteRequest {
                         candidate_term: self.current_term,
                         candidate_id: self.id,
                         candidate_last_log_idx: self.log.entries.len(),
-                        candidate_last_log_term: last_term,
+                        candidate_last_log_term: self.log.last_term(),
                     });
                     let msg = (Target::Broadcast, rpc);
-                    self.transport_layer.send(&msg)
-                } else {
-                    // nothing happened, just ticked the clock
-                    Ok(())
+                    self.transport_layer
+                        .send(&msg)
+                        .expect("invalid recipient server")
                 }
             }
             Candidate(state) => {
                 // TODO: stub
-                Ok(())
             }
             Leader(state) => {
                 // TODO: stub
-                Ok(())
             }
         }
+        self
     }
 
-    pub fn receive_rpc(&self, rpc: &RPC<T>) {
-        // TODO: stub
+    pub fn receive_rpc(&mut self, rpc: &RPC<T>) {
+        match rpc {
+            RPC::VoteRequest(req) => {
+                if req.candidate_term > self.current_term {
+                    // we are out of date!
+                    // set candidate back to follower state and bump current term
+                    self.current_term = req.candidate_term;
+                    self.voted_for = None;
+                    self.leadership_state = RaftLeadershipState::Follower(FollowerState {
+                        leader: None, // as we are in an election
+                        election_time: self.random_election_time(),
+                    })
+                }
+
+                // check if candidate's log is up to date with ours
+                // if they are outdated, don't vote for them (we don't want an outdated leader)
+            }
+            RPC::AppendRequest(req) => {
+                // TODO: stub
+            }
+        }
     }
 }
 
