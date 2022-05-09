@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use crate::server::Term;
 
 /// Type alias for indexing into the [`Log`]

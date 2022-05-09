@@ -3,12 +3,13 @@ use crate::{
     rpc::{AppendRequest, AppendResponse, Target, VoteRequest, VoteResponse, RPC},
     transport::TransportMedium,
 };
+use anyhow::{bail, Result};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ops::{Div, Range},
+    ops::Div,
 };
 
 /// Type alias for Raft leadership term
@@ -244,6 +245,38 @@ where
         }
     }
 
+    pub fn client_request(&mut self, msg: T) -> Result<()> {
+        match &mut self.leadership_state {
+            RaftLeadershipState::Leader(state) => {
+                // append log entry
+                self.log.entries.push(LogEntry {
+                    term: self.current_term,
+                    data: msg,
+                });
+
+                // move forward our own acked length for that node
+                let self_replication_state = state.followers.get_mut(&self.id).unwrap();
+                self_replication_state.acked_up_to = self.log.entries.len();
+
+                // replicate our log to followers
+                self.replicate_log();
+                Ok(())
+            }
+            _ => {
+                // we aren't a leader so not authorized to add to the replicated log
+                // respond to client by saying we are not the leader. client is responsible
+                // for trying again with a different server
+                bail!("cannot add a log entry to a non-leader!")
+
+                // in a more robust implementation, client requests would generate a unique
+                // serial number of each request (client id, request number) and 'retry' with
+                // each peer until it succeeds. servers then track latest serial number for each
+                // client plus associated response. on duplicates, the leader sends the old response with
+                // re-executing the msg (linearizable)
+            }
+        }
+    }
+
     /// Replicate some section of our log entries to followers.
     /// Intended to only be called when we are a Leader, do nothing otherwise
     fn replicate_log(&mut self) {
@@ -364,26 +397,7 @@ where
 
     /// Process an RPC request to append a message to the replicated event log
     fn rpc_append_request(&mut self, req: &AppendRequest<T>) {
-        match &mut self.leadership_state {
-            RaftLeadershipState::Leader(state) => {
-                // append log entries in request to our own
-                self.log.entries.extend(req.entries.clone());
-
-                // move forward our own acked length for that node
-                let self_replication_state = state.followers.get_mut(&self.id).unwrap();
-                self_replication_state.acked_up_to = self.log.entries.len();
-
-                // replicate our log to followers
-                self.replicate_log();
-            }
-            _ => {
-                // we aren't a leader so not authorized to add to the replicated log
-                // forward to leader to handle + sequence it appropriately
-                let rpc = RPC::AppendRequest(req.clone());
-                let msg = (Target::Single(req.leader_id), rpc);
-                self.transport_layer.send(&msg).unwrap();
-            }
-        }
+        // TODO: stub
     }
 
     /// Process an RPC response to [`rpc_append_request`]

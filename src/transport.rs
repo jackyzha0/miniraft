@@ -24,10 +24,7 @@ where
         match msg {
             (Target::Single(target), rpc) => {
                 // get target peer, return an error if its not found
-                let peer = self
-                    .peers
-                    .get_mut(&target)
-                    .ok_or(Error::msg("peer not found"))?;
+                let peer = self.peers.get_mut(&target).expect("peer not found");
                 peer.receive_rpc(rpc);
                 Ok(())
             }
