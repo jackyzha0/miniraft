@@ -11,7 +11,6 @@ pub enum Target {
 }
 
 /// A Raft RPC request
-#[derive(Debug)]
 pub enum RPC<T> {
     VoteRequest(VoteRequest),
     AppendRequest(AppendRequest<T>),

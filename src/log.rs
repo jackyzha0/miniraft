@@ -57,3 +57,28 @@ impl<T> Log<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::log::*;
+
+    #[test]
+    fn last_term_and_index_of_empty() {
+        let l: Log<u32> = Log::new();
+        assert_eq!(l.last_term(), 0);
+        assert_eq!(l.last_idx(), 0);
+    }
+
+    #[test]
+    fn last_term_and_index_of_non_empty() {
+        let mut l: Log<u32> = Log::new();
+        l.entries.push_back(LogEntry { term: 0, data: 1 });
+        l.entries.push_back(LogEntry { term: 0, data: 2 });
+        assert_eq!(l.last_term(), 0);
+        assert_eq!(l.last_idx(), 1);
+
+        l.entries.push_back(LogEntry { term: 1, data: 3 });
+        assert_eq!(l.last_term(), 1);
+        assert_eq!(l.last_idx(), 2);
+    }
+}
