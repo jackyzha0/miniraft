@@ -212,7 +212,23 @@ where
                 // TODO: stub
             }
             Leader(state) => {
-                // TODO: stub
+                state.heartbeat_timeout = state.heartbeat_timeout.saturating_sub(1);
+                if state.heartbeat_timeout == 0 {
+                    // time to next heartbeat, ping all nodes to assert our dominance
+                    // and let them know we are still alive
+                    state.followers.keys().for_each(|follower_id| {
+                        let rpc = RPC::AppendRequest(AppendRequest {
+                            entries: Vec::new(), // heartbeat should be empty
+                            leader_id: self.id,
+                            leader_term: self.current_term,
+                            leader_commit: self.log.commit_idx,
+                            leader_last_log_idx: self.log.last_idx(),
+                            leader_last_log_term: self.log.last_term(),
+                        });
+                        let msg = (Target::Single(*follower_id), rpc);
+                        self.transport_layer.send(&msg).unwrap();
+                    });
+                }
             }
         }
         self
