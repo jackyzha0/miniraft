@@ -41,6 +41,7 @@ pub struct VoteResponse {
 }
 
 /// Request from leader to append entries to follower's log
+#[derive(Clone)]
 pub struct AppendRequest<T> {
     /// Term of leader requesting log append
     pub leader_term: Term,

@@ -15,6 +15,7 @@ pub struct ReliableTransport<'t, T> {
     peers: BTreeMap<ServerId, &'t mut RaftServer<'t, T>>,
 }
 
+/// Simulate a perfectly reliable transport medium that never drops packets
 impl<'t, T> TransportMedium<T> for ReliableTransport<'t, T>
 where
     T: Clone,

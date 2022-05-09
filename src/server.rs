@@ -1,5 +1,5 @@
 use crate::{
-    log::{Log, LogIndex},
+    log::{Log, LogEntry, LogIndex},
     rpc::{AppendRequest, AppendResponse, Target, VoteRequest, VoteResponse, RPC},
     transport::TransportMedium,
 };
@@ -8,7 +8,7 @@ use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ops::Div,
+    ops::{Div, Range},
 };
 
 /// Type alias for Raft leadership term
@@ -20,7 +20,6 @@ pub type ServerId = usize;
 type Ticks = u32;
 
 /// Configuration options for a Raft server
-#[derive(Debug)]
 pub struct RaftConfig {
     /// How long a server should wait for a message from
     /// current leader before giving up and starting an election
@@ -35,7 +34,6 @@ pub struct RaftConfig {
 }
 
 /// Possible states a Raft Node can be in
-#[derive(Debug)]
 pub enum RaftLeadershipState {
     /// Issues no requests but responds to requests from leaders and candidates.
     /// All Raft Nodes start in Follower state
@@ -60,7 +58,6 @@ impl PartialEq for RaftLeadershipState {
     }
 }
 
-#[derive(Debug)]
 pub struct FollowerState {
     /// Current leader node is following
     leader: Option<ServerId>,
@@ -68,7 +65,6 @@ pub struct FollowerState {
     election_time: Ticks,
 }
 
-#[derive(Debug)]
 pub struct CandidateState {
     /// Set of all nodes this node has received votes for
     votes_received: BTreeSet<ServerId>,
@@ -76,7 +72,6 @@ pub struct CandidateState {
     election_time: Ticks,
 }
 
-#[derive(Debug)]
 pub struct LeaderState {
     /// Track state about followers to figure out what to send them next
     followers: BTreeMap<ServerId, NodeReplicationState>,
@@ -85,7 +80,6 @@ pub struct LeaderState {
 }
 
 /// State of a single Node as tracked by a leader
-#[derive(Debug)]
 pub struct NodeReplicationState {
     /// Index of next log entry to send to that server.
     /// Initialized to leader's last log index + 1
@@ -216,18 +210,7 @@ where
                 if state.heartbeat_timeout == 0 {
                     // time to next heartbeat, ping all nodes to assert our dominance
                     // and let them know we are still alive
-                    state.followers.keys().for_each(|follower_id| {
-                        let rpc = RPC::AppendRequest(AppendRequest {
-                            entries: Vec::new(), // heartbeat should be empty
-                            leader_id: self.id,
-                            leader_term: self.current_term,
-                            leader_commit: self.log.commit_idx,
-                            leader_last_log_idx: self.log.last_idx(),
-                            leader_last_log_term: self.log.last_term(),
-                        });
-                        let msg = (Target::Single(*follower_id), rpc);
-                        self.transport_layer.send(&msg).unwrap();
-                    });
+                    self.replicate_log();
                 }
             }
         }
@@ -258,6 +241,34 @@ where
             RPC::VoteResponse(res) => self.rpc_vote_response(res),
             RPC::AppendRequest(req) => self.rpc_append_request(req),
             RPC::AppendResponse(res) => self.rpc_append_response(res),
+        }
+    }
+
+    /// Replicate some section of our log entries to followers.
+    /// Intended to only be called when we are a Leader, do nothing otherwise
+    fn replicate_log(&mut self) {
+        match &mut self.leadership_state {
+            RaftLeadershipState::Leader(state) => {
+                // replicate to all of our followers
+                state.followers.keys().for_each(|target| {
+                    // figure out what entries we should send
+                    let prefix_len = state.followers.get(target).unwrap().sent_up_to;
+                    let entries = self.log.entries[prefix_len..self.log.entries.len()].to_vec();
+                    let prefix_term = self.log.entries.get(prefix_len - 1).unwrap().term;
+
+                    let rpc = RPC::AppendRequest(AppendRequest {
+                        entries,
+                        leader_id: self.id,
+                        leader_term: self.current_term,
+                        leader_commit: self.log.commit_idx,
+                        leader_last_log_idx: prefix_len,
+                        leader_last_log_term: prefix_term,
+                    });
+                    let msg = (Target::Single(*target), rpc);
+                    self.transport_layer.send(&msg).unwrap();
+                });
+            }
+            _ => {}
         }
     }
 
@@ -325,7 +336,6 @@ where
 
                     // otherwise, we won election! promote self to leader
                     // initialize followers to all nodes who voted for us
-                    // then replicate our logs to them
                     let mut followers = BTreeMap::new();
                     state.votes_received.iter().for_each(|votee| {
                         // add that votee to our list of followers
@@ -336,25 +346,16 @@ where
                                 acked_up_to: 0,
                             },
                         );
-
-                        // replicate our log with each follower
-                        let rpc = RPC::AppendRequest(AppendRequest {
-                            entries: self.log.entries.clone().into(),
-                            leader_id: self.id,
-                            leader_term: self.current_term,
-                            leader_commit: self.log.commit_idx,
-                            leader_last_log_idx: self.log.last_idx(),
-                            leader_last_log_term: self.log.last_term(),
-                        });
-                        let msg = (Target::Single(*votee), rpc);
-                        self.transport_layer.send(&msg).unwrap();
                     });
 
-                    // setup done, set state to leader
+                    // set state to leader
                     self.leadership_state = RaftLeadershipState::Leader(LeaderState {
                         followers,
                         heartbeat_timeout: self.config.heartbeat_interval,
                     });
+
+                    // then replicate our logs to all our followers
+                    self.replicate_log();
                 }
             }
             _ => {} // do nothing if we are not a candidate
@@ -363,7 +364,26 @@ where
 
     /// Process an RPC request to append a message to the replicated event log
     fn rpc_append_request(&mut self, req: &AppendRequest<T>) {
-        // TODO: stub
+        match &mut self.leadership_state {
+            RaftLeadershipState::Leader(state) => {
+                // append log entries in request to our own
+                self.log.entries.extend(req.entries.clone());
+
+                // move forward our own acked length for that node
+                let self_replication_state = state.followers.get_mut(&self.id).unwrap();
+                self_replication_state.acked_up_to = self.log.entries.len();
+
+                // replicate our log to followers
+                self.replicate_log();
+            }
+            _ => {
+                // we aren't a leader so not authorized to add to the replicated log
+                // forward to leader to handle + sequence it appropriately
+                let rpc = RPC::AppendRequest(req.clone());
+                let msg = (Target::Single(req.leader_id), rpc);
+                self.transport_layer.send(&msg).unwrap();
+            }
+        }
     }
 
     /// Process an RPC response to [`rpc_append_request`]
