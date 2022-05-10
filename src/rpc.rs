@@ -1,5 +1,5 @@
 use crate::log::{LogEntry, LogIndex};
-use crate::server::{ServerId, Term};
+use crate::server::{RaftServer, ServerId, Term};
 
 /// A message can be either targeted at a single server or to everyone
 pub type SendableMessage<T> = (Target, RPC<T>);

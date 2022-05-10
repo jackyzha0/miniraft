@@ -108,7 +108,7 @@ pub struct RaftServer<'s, T> {
     voted_for: Option<ServerId>,
     /// List of log entries for this node.
     /// This is the data that is being replicated
-    log: Log<T>,
+    log: Log<'s, T>,
 
     /// State of the node that depends on its leadership status
     /// (one of [`FollowerState`], [`CandidateState`], or [`LeaderState`])
@@ -285,6 +285,7 @@ where
                 // replicate to all of our followers
                 state.followers.keys().for_each(|target| {
                     // figure out what entries we should send
+                    // prefix len is the index of all the entries we have sent up to
                     let prefix_len = state.followers.get(target).unwrap().sent_up_to;
                     let entries = self.log.entries[prefix_len..self.log.entries.len()].to_vec();
                     let prefix_term = self.log.entries.get(prefix_len - 1).unwrap().term;
@@ -397,7 +398,53 @@ where
 
     /// Process an RPC request to append a message to the replicated event log
     fn rpc_append_request(&mut self, req: &AppendRequest<T>) {
-        // TODO: stub
+        // check to see if we are out of date
+        if req.leader_term > self.current_term {
+            self.reset_to_follower(req.leader_term);
+        }
+
+        match &mut self.leadership_state {
+            RaftLeadershipState::Candidate(_) | RaftLeadershipState::Leader(_) => {
+                // if leader is in same term as us, they have recovered from
+                // failure and we can go back to follower and try the request again
+                if req.leader_term == self.current_term {
+                    self.reset_to_follower(req.leader_term);
+                    self.rpc_append_request(req);
+                }
+            }
+            RaftLeadershipState::Follower(state) => {
+                // if leader is same term as us, we accept requester as current leader
+                let success = if req.leader_term == self.current_term {
+                    state.leader = Some(req.leader_id);
+
+                    // check if we have the messages that the leader is claiming we have
+                    let prefix_len = req.leader_last_log_idx;
+                    let prefix_ok = self.log.entries.len() >= prefix_len;
+                    let last_log_entry_matches_terms = prefix_len == 0
+                        || (self.log.entries.get(prefix_len - 1).unwrap().term
+                            == req.leader_last_log_term);
+
+                    if prefix_ok && last_log_entry_matches_terms {
+                        // assumptions match, append it to our local log
+                        self.log
+                            .append_entries(prefix_len, req.leader_commit, req.entries.clone());
+                        // ok, succeeded
+                        true
+                    } else {
+                        // bad request if we have mismatched assumptions about where the log is
+                        false
+                    }
+                } else {
+                    // bad request if we have mismatched terms
+                    false
+                };
+
+                // send response
+                let rpc = RPC::AppendResponse(AppendResponse { ok: success });
+                let msg = (Target::Single(req.leader_id), rpc);
+                self.transport_layer.send(&msg).unwrap();
+            }
+        }
     }
 
     /// Process an RPC response to [`rpc_append_request`]

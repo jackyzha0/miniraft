@@ -1,7 +1,12 @@
 use crate::server::Term;
+use std::cmp::min;
 
 /// Type alias for indexing into the [`Log`]
 pub type LogIndex = usize;
+
+/// Hacking a trait alias for a closure that consumes log entries
+pub trait LogConsumer<T>: FnMut(&LogEntry<T>) {}
+impl<T, F> LogConsumer<T> for F where F: FnMut(&LogEntry<T>) {}
 
 /// A single log entry
 #[derive(Clone)]
@@ -14,7 +19,7 @@ pub struct LogEntry<T> {
 }
 
 /// A collection of LogEntries
-pub struct Log<T> {
+pub struct Log<'a, T> {
     pub entries: Vec<LogEntry<T>>,
 
     /// Index of highest log entry known to be commited.
@@ -24,15 +29,18 @@ pub struct Log<T> {
     /// Index of highest log entry applied to state machine.
     /// Initialized to 0, increases monotonically.
     pub last_applied: LogIndex,
+
+    app: &'a mut dyn App<T>,
 }
 
-impl<T> Log<T> {
+impl<'a, T> Log<'a, T> {
     /// Instantiate a new empty event log
-    pub fn new() -> Self {
+    pub fn new(app: &'a mut dyn App<T>) -> Self {
         Log {
             entries: Vec::new(),
             commit_idx: 0,
             last_applied: 0,
+            app,
         }
     }
 
@@ -53,22 +61,83 @@ impl<T> Log<T> {
             0
         }
     }
+
+    /// Append additional entries to the log.
+    /// `prefix_idx` is what index caller expects entries to be inserted at,
+    /// `leader_commit_idx` is the index of last log that leader has commited.
+    pub fn append_entries(
+        &mut self,
+        prefix_idx: LogIndex,
+        leader_commit_idx: LogIndex,
+        mut entries: Vec<LogEntry<T>>,
+    ) {
+        // check to see if we need to truncate our existing log
+        // this happens when we have conflicts between our log and leader's log
+        // we roll back to last log entry that matches the leader
+        if entries.len() > 0 && self.entries.len() > prefix_idx {
+            let rollback_to = min(self.entries.len(), prefix_idx + entries.len()) - 1;
+            let our_last_term = self.entries.get(rollback_to).unwrap().term;
+            let leader_last_term = entries.get(rollback_to - prefix_idx).unwrap().term;
+
+            // truncate from start to rollback_to
+            if our_last_term != leader_last_term {
+                self.entries.truncate(rollback_to);
+            }
+        }
+
+        // add all entries we don't have
+        if prefix_idx + entries.len() > self.entries.len() {
+            let new_entries_range = self.entries.len() - prefix_idx..;
+            self.entries.extend(entries.drain(new_entries_range));
+        }
+
+        // leader has commited more messages than us, we can move forward and commit some of our messages
+        if leader_commit_idx > self.commit_idx {
+            // apply
+            self.entries[self.commit_idx..leader_commit_idx]
+                .iter()
+                .for_each(|entry| self.app.transition_fn(entry));
+
+            self.commit_idx = leader_commit_idx;
+        }
+    }
+}
+
+pub trait App<T> {
+    fn transition_fn(&mut self, entry: &LogEntry<T>);
 }
 
 #[cfg(test)]
 mod tests {
     use crate::log::*;
 
+    pub struct CountingApp {
+        state: u32,
+    }
+
+    impl App<u32> for CountingApp {
+        fn transition_fn(&mut self, entry: &LogEntry<u32>) {
+            self.state += entry.data;
+        }
+    }
+
+    fn setup() -> CountingApp {
+        CountingApp { state: 0 }
+    }
+
     #[test]
     fn last_term_and_index_of_empty() {
-        let l: Log<u32> = Log::new();
+        let mut app = setup();
+        let mut l: Log<u32> = Log::new(&mut app);
         assert_eq!(l.last_term(), 0);
         assert_eq!(l.last_idx(), 0);
+        assert_eq!(app.state, 0);
     }
 
     #[test]
     fn last_term_and_index_of_non_empty() {
-        let mut l: Log<u32> = Log::new();
+        let mut app = setup();
+        let mut l: Log<u32> = Log::new(&mut app);
         l.entries.push(LogEntry { term: 0, data: 1 });
         l.entries.push(LogEntry { term: 0, data: 2 });
         assert_eq!(l.last_term(), 0);

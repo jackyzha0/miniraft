@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{Error, Result};
 
 use crate::{
+    log::LogConsumer,
     rpc::{SendableMessage, Target},
     server::{RaftServer, ServerId},
 };
