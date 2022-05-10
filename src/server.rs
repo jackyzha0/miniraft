@@ -60,17 +60,17 @@ impl PartialEq for RaftLeadershipState {
 }
 
 pub struct FollowerState {
-    /// Current leader node is following
-    leader: Option<ServerId>,
     /// Ticks left to start an election if not reset by activity/heartbeat
     election_time: Ticks,
+    /// Current leader node is following
+    leader: Option<ServerId>,
 }
 
 pub struct CandidateState {
-    /// Set of all nodes this node has received votes for
-    votes_received: BTreeSet<ServerId>,
     /// Ticks left to start an election if quorum is not reached
     election_time: Ticks,
+    /// Set of all nodes this node has received votes for
+    votes_received: BTreeSet<ServerId>,
 }
 
 pub struct LeaderState {
@@ -176,12 +176,16 @@ where
     pub fn tick(&mut self) -> &mut Self {
         use RaftLeadershipState::*;
         match &mut self.leadership_state {
-            Follower(state) => {
-                state.election_time = state.election_time.saturating_sub(1);
+            Follower(FollowerState { election_time, .. })
+            | Candidate(CandidateState { election_time, .. }) => {
+                *election_time = election_time.saturating_sub(1);
 
                 // suspect leader has failed, election timeout reached
                 // attempt to become candidate
-                if state.election_time == 0 {
+                if *election_time == 0 {
+                    // increment term
+                    self.current_term += 1;
+
                     // vote for self
                     self.voted_for = Some(self.id);
                     let mut vote_list = BTreeSet::new();
@@ -203,9 +207,6 @@ where
                     let msg = (Target::Broadcast, rpc);
                     self.transport_layer.send(&msg).unwrap()
                 }
-            }
-            Candidate(state) => {
-                // TODO: stub
             }
             Leader(state) => {
                 state.heartbeat_timeout = state.heartbeat_timeout.saturating_sub(1);

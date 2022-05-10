@@ -93,10 +93,15 @@ impl<T, S> Log<T, S> {
 
         // leader has commited more messages than us, we can move forward and commit some of our messages
         if leader_commit_idx > self.commit_idx {
-            // apply
+            // apply each element log we haven't committed
             self.entries[self.commit_idx..leader_commit_idx]
                 .iter()
-                .for_each(|entry| self.app.transition_fn(entry));
+                .enumerate()
+                .for_each(|(i, entry)| {
+                    // apply each log entry to the state machine
+                    self.app.transition_fn(entry);
+                    self.last_applied = self.commit_idx + i;
+                });
 
             self.commit_idx = leader_commit_idx;
         }
