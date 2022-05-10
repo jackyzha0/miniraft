@@ -19,7 +19,7 @@ pub struct LogEntry<T> {
 }
 
 /// A collection of LogEntries
-pub struct Log<'a, T> {
+pub struct Log<T, S> {
     pub entries: Vec<LogEntry<T>>,
 
     /// Index of highest log entry known to be commited.
@@ -30,12 +30,12 @@ pub struct Log<'a, T> {
     /// Initialized to 0, increases monotonically.
     pub last_applied: LogIndex,
 
-    app: &'a mut dyn App<T>,
+    app: Box<dyn App<T, S>>,
 }
 
-impl<'a, T> Log<'a, T> {
+impl<T, S> Log<T, S> {
     /// Instantiate a new empty event log
-    pub fn new(app: &'a mut dyn App<T>) -> Self {
+    pub fn new(app: Box<dyn App<T, S>>) -> Self {
         Log {
             entries: Vec::new(),
             commit_idx: 0,
@@ -103,8 +103,9 @@ impl<'a, T> Log<'a, T> {
     }
 }
 
-pub trait App<T> {
+pub trait App<T, S> {
     fn transition_fn(&mut self, entry: &LogEntry<T>);
+    fn get_state(&self) -> S;
 }
 
 #[cfg(test)]
@@ -115,9 +116,12 @@ mod tests {
         state: u32,
     }
 
-    impl App<u32> for CountingApp {
+    impl App<u32, u32> for CountingApp {
         fn transition_fn(&mut self, entry: &LogEntry<u32>) {
             self.state += entry.data;
+        }
+        fn get_state(&self) -> u32 {
+            self.state
         }
     }
 
@@ -127,17 +131,17 @@ mod tests {
 
     #[test]
     fn last_term_and_index_of_empty() {
-        let mut app = setup();
-        let mut l: Log<u32> = Log::new(&mut app);
+        let app = setup();
+        let l: Log<u32, u32> = Log::new(Box::new(app));
         assert_eq!(l.last_term(), 0);
         assert_eq!(l.last_idx(), 0);
-        assert_eq!(app.state, 0);
+        assert_eq!(l.app.get_state(), 0);
     }
 
     #[test]
     fn last_term_and_index_of_non_empty() {
-        let mut app = setup();
-        let mut l: Log<u32> = Log::new(&mut app);
+        let app = setup();
+        let mut l: Log<u32, u32> = Log::new(Box::new(app));
         l.entries.push(LogEntry { term: 0, data: 1 });
         l.entries.push(LogEntry { term: 0, data: 2 });
         assert_eq!(l.last_term(), 0);

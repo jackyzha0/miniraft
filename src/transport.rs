@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Error, Result};
+use anyhow::Result;
 
 use crate::{
-    log::LogConsumer,
     rpc::{SendableMessage, Target},
     server::{RaftServer, ServerId},
 };
@@ -12,12 +11,12 @@ pub trait TransportMedium<T> {
     fn send(&mut self, msg: &SendableMessage<T>) -> Result<()>;
 }
 
-pub struct ReliableTransport<'t, T> {
-    peers: BTreeMap<ServerId, &'t mut RaftServer<'t, T>>,
+pub struct ReliableTransport<'t, T, S> {
+    peers: BTreeMap<ServerId, &'t mut RaftServer<'t, T, S>>,
 }
 
 /// Simulate a perfectly reliable transport medium that never drops packets
-impl<'t, T> TransportMedium<T> for ReliableTransport<'t, T>
+impl<'t, T, S> TransportMedium<T> for ReliableTransport<'t, T, S>
 where
     T: Clone,
 {

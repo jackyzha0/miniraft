@@ -1,5 +1,5 @@
 use crate::{
-    log::{Log, LogEntry, LogIndex},
+    log::{App, Log, LogEntry, LogIndex},
     rpc::{AppendRequest, AppendResponse, Target, VoteRequest, VoteResponse, RPC},
     transport::TransportMedium,
 };
@@ -92,7 +92,7 @@ pub struct NodeReplicationState {
 }
 
 /// A Raft server that replicates Logs of type `T`
-pub struct RaftServer<'s, T> {
+pub struct RaftServer<'s, T, S> {
     // Static State
     /// ID of this node
     id: ServerId,
@@ -108,7 +108,7 @@ pub struct RaftServer<'s, T> {
     voted_for: Option<ServerId>,
     /// List of log entries for this node.
     /// This is the data that is being replicated
-    log: Log<'s, T>,
+    log: Log<T, S>,
 
     /// State of the node that depends on its leadership status
     /// (one of [`FollowerState`], [`CandidateState`], or [`LeaderState`])
@@ -121,7 +121,7 @@ pub struct RaftServer<'s, T> {
     transport_layer: &'s mut dyn TransportMedium<T>,
 }
 
-impl<'s, T> RaftServer<'s, T>
+impl<'s, T, S> RaftServer<'s, T, S>
 where
     T: Clone,
 {
@@ -130,6 +130,7 @@ where
         peers: BTreeSet<ServerId>,
         config: RaftConfig,
         seed: Option<u64>,
+        app: Box<dyn App<T, S>>,
         transport_layer: &'s mut dyn TransportMedium<T>,
     ) -> Self {
         // Create RNG generator from seed if it exists, otherwise seed from system entropy
@@ -152,7 +153,7 @@ where
             config,
             current_term: 0,
             voted_for: None,
-            log: Log::new(),
+            log: Log::new(app),
             rng,
             transport_layer,
             leadership_state: RaftLeadershipState::Follower(FollowerState {
