@@ -461,7 +461,10 @@ where
                     if res.ok && res.ack_idx >= follower_state.acked_up_to {
                         // update replication state, we know follower has sent + acked up
                         // to `replication_state.ack_idx`
+                        follower_state.sent_up_to = res.ack_idx;
+                        follower_state.acked_up_to = res.ack_idx;
                         // try to formally commit these entries
+                        self.commit_log_entries();
                     } else if follower_state.sent_up_to > 0 {
                         // if there's a gap in the log, res.ok is not true!
                         // reduce what we assume the client has received by one and try again
@@ -471,6 +474,42 @@ where
                 }
             }
             _ => {} // do nothing if we aren't a leader
+        }
+    }
+
+    /// Commit any log entries that have been acknowledged by a quorum of nodes.
+    /// When a log entry is committed, its message is delivered to the application.
+    fn commit_log_entries(&mut self) {
+        let quorum_size = self.quorum_size();
+        match &mut self.leadership_state {
+            RaftLeadershipState::Leader(state) => {
+                // construct a collection of all our peers
+                let mut all_nodes: Vec<&ServerId> = self.peers.iter().collect();
+                all_nodes.push(&self.id);
+
+                // repeat until we have committed all entries
+                while self.log.commit_idx < self.log.entries.len() {
+                    // count all nodes which have acked past what our current commit_idx is
+                    // +1 is to include ourselves!
+                    let acks = state
+                        .followers
+                        .values()
+                        .filter(|follower_state| follower_state.acked_up_to > self.log.commit_idx)
+                        .count()
+                        + 1;
+
+                    if acks >= quorum_size {
+                        // hit quorum! deliver last log to application and bump commit_idx
+                        self.log.deliver_msg(self.log.commit_idx);
+                        self.log.commit_idx += 1;
+                    } else {
+                        // exit early, nothing we can do except wait for more nodes to acknowledge
+                        // the entries we told them to add
+                        break;
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }

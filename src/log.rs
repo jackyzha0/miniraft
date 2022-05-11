@@ -24,6 +24,7 @@ pub struct Log<T, S> {
 
     /// Index of highest log entry known to be commited.
     /// A log entry is considered 'safely replicated' or committed once it is replicated on a majority of servers.
+    /// Only meaningful on servers which are leaders.
     /// Initialized to 0, increases monotonically.
     pub commit_idx: LogIndex,
     /// Index of highest log entry applied to state machine.
@@ -103,8 +104,15 @@ impl<T, S> Log<T, S> {
                     self.last_applied = self.commit_idx + i;
                 });
 
+            // update commit index to reflect changes
             self.commit_idx = leader_commit_idx;
         }
+    }
+
+    /// Deliver a single message from the message log to the application
+    pub fn deliver_msg(&mut self, msg_idx: LogIndex) {
+        self.app.transition_fn(self.entries.get(msg_idx).unwrap());
+        self.last_applied += 1;
     }
 }
 
