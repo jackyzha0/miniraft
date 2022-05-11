@@ -59,5 +59,12 @@ pub struct AppendRequest<T> {
 
 /// Response to an [`AppendRequest`]
 pub struct AppendResponse {
+    /// Whether the follower added it to their log or not
     pub ok: bool,
+    /// [`current_term`](RaftServer::current_term) of server for candidate to update itself
+    pub term: Term,
+    /// Index of the last log entry we appended to the log
+    pub ack_idx: LogIndex,
+    /// Follower ID
+    pub follower_id: ServerId,
 }

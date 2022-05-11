@@ -47,18 +47,6 @@ pub enum RaftLeadershipState {
     Leader(LeaderState),
 }
 
-impl PartialEq for RaftLeadershipState {
-    fn eq(&self, other: &Self) -> bool {
-        use RaftLeadershipState::*;
-        match (self, other) {
-            (Follower(_), Follower(_)) => true,
-            (Candidate(_), Candidate(_)) => true,
-            (Leader(_), Leader(_)) => true,
-            (_, _) => false,
-        }
-    }
-}
-
 pub struct FollowerState {
     /// Ticks left to start an election if not reset by activity/heartbeat
     election_time: Ticks,
@@ -213,7 +201,7 @@ where
                 if state.heartbeat_timeout == 0 {
                     // time to next heartbeat, ping all nodes to assert our dominance
                     // and let them know we are still alive
-                    self.replicate_log();
+                    self.replicate_log(Target::Broadcast);
                 }
             }
         }
@@ -261,7 +249,7 @@ where
                 self_replication_state.acked_up_to = self.log.entries.len();
 
                 // replicate our log to followers
-                self.replicate_log();
+                self.replicate_log(Target::Broadcast);
                 Ok(())
             }
             _ => {
@@ -281,11 +269,12 @@ where
 
     /// Replicate some section of our log entries to followers.
     /// Intended to only be called when we are a Leader, do nothing otherwise
-    fn replicate_log(&mut self) {
+    fn replicate_log(&mut self, target: Target) {
         match &mut self.leadership_state {
             RaftLeadershipState::Leader(state) => {
-                // replicate to all of our followers
-                state.followers.keys().for_each(|target| {
+                // construct closure for the sending logic so we don't need
+                // to duplicate logic
+                let mut sending_logic = |target| {
                     // figure out what entries we should send
                     // prefix len is the index of all the entries we have sent up to
                     let prefix_len = state.followers.get(target).unwrap().sent_up_to;
@@ -302,7 +291,12 @@ where
                     });
                     let msg = (Target::Single(*target), rpc);
                     self.transport_layer.send(&msg).unwrap();
-                });
+                };
+
+                match target {
+                    Target::Single(target) => sending_logic(&target),
+                    Target::Broadcast => state.followers.keys().for_each(sending_logic),
+                }
             }
             _ => {}
         }
@@ -391,7 +385,7 @@ where
                     });
 
                     // then replicate our logs to all our followers
-                    self.replicate_log();
+                    self.replicate_log(Target::Broadcast);
                 }
             }
             _ => {} // do nothing if we are not a candidate
@@ -430,19 +424,21 @@ where
                         // assumptions match, append it to our local log
                         self.log
                             .append_entries(prefix_len, req.leader_commit, req.entries.clone());
-                        // ok, succeeded
-                        true
+                        true // success
                     } else {
-                        // bad request if we have mismatched assumptions about where the log is
-                        false
+                        false // bad request if we have mismatched assumptions about where the log is
                     }
                 } else {
-                    // bad request if we have mismatched terms
-                    false
+                    false // bad request if we have mismatched terms
                 };
 
                 // send response
-                let rpc = RPC::AppendResponse(AppendResponse { ok: success });
+                let rpc = RPC::AppendResponse(AppendResponse {
+                    ok: success,
+                    term: self.current_term,
+                    ack_idx: self.log.entries.len(),
+                    follower_id: self.id,
+                });
                 let msg = (Target::Single(req.leader_id), rpc);
                 self.transport_layer.send(&msg).unwrap();
             }
@@ -451,7 +447,31 @@ where
 
     /// Process an RPC response to [`rpc_append_request`]
     fn rpc_append_response(&mut self, res: &AppendResponse) {
-        // TODO: stub
+        // check to see if we are out of date
+        if res.term > self.current_term {
+            self.reset_to_follower(res.term);
+        }
+
+        match &mut self.leadership_state {
+            RaftLeadershipState::Leader(state) => {
+                if res.term == self.current_term {
+                    // make sure that the response was ok and the length that the follower is
+                    // at is greater than what we have recorded for them before
+                    let follower_state = state.followers.get_mut(&res.follower_id).unwrap();
+                    if res.ok && res.ack_idx >= follower_state.acked_up_to {
+                        // update replication state, we know follower has sent + acked up
+                        // to `replication_state.ack_idx`
+                        // try to formally commit these entries
+                    } else if follower_state.sent_up_to > 0 {
+                        // if there's a gap in the log, res.ok is not true!
+                        // reduce what we assume the client has received by one and try again
+                        follower_state.sent_up_to = follower_state.sent_up_to.saturating_sub(1);
+                        self.replicate_log(Target::Single(res.follower_id));
+                    }
+                }
+            }
+            _ => {} // do nothing if we aren't a leader
+        }
     }
 }
 
