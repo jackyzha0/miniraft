@@ -31,6 +31,7 @@ pub struct Log<T, S> {
     /// Initialized to 0, increases monotonically.
     pub last_applied: LogIndex,
 
+    /// State machine
     app: Box<dyn App<T, S>>,
 }
 
@@ -77,8 +78,15 @@ impl<T, S> Log<T, S> {
         // we roll back to last log entry that matches the leader
         if entries.len() > 0 && self.entries.len() > prefix_idx {
             let rollback_to = min(self.entries.len(), prefix_idx + entries.len()) - 1;
-            let our_last_term = self.entries.get(rollback_to).unwrap().term;
-            let leader_last_term = entries.get(rollback_to - prefix_idx).unwrap().term;
+            let our_last_term = self
+                .entries
+                .get(rollback_to)
+                .expect("rollback index was out of bounds")
+                .term;
+            let leader_last_term = entries
+                .get(rollback_to - prefix_idx)
+                .expect("leader first term index was out of bounds")
+                .term;
 
             // truncate from start to rollback_to
             if our_last_term != leader_last_term {
@@ -111,7 +119,11 @@ impl<T, S> Log<T, S> {
 
     /// Deliver a single message from the message log to the application
     pub fn deliver_msg(&mut self, msg_idx: LogIndex) {
-        self.app.transition_fn(self.entries.get(msg_idx).unwrap());
+        self.app.transition_fn(
+            self.entries
+                .get(msg_idx)
+                .expect("msg_idx of msg to be deliveres was out of bounds"),
+        );
         self.last_applied += 1;
     }
 }

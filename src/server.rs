@@ -193,7 +193,9 @@ where
                         candidate_last_log_term: self.log.last_term(),
                     });
                     let msg = (Target::Broadcast, rpc);
-                    self.transport_layer.send(&msg).unwrap()
+                    self.transport_layer
+                        .send(&msg)
+                        .expect("transport failure: invalid target")
                 }
             }
             Leader(state) => {
@@ -237,16 +239,12 @@ where
 
     pub fn client_request(&mut self, msg: T) -> Result<()> {
         match &mut self.leadership_state {
-            RaftLeadershipState::Leader(state) => {
+            RaftLeadershipState::Leader(_) => {
                 // append log entry
                 self.log.entries.push(LogEntry {
                     term: self.current_term,
                     data: msg,
                 });
-
-                // move forward our own acked length for that node
-                let self_replication_state = state.followers.get_mut(&self.id).unwrap();
-                self_replication_state.acked_up_to = self.log.entries.len();
 
                 // replicate our log to followers
                 self.replicate_log(Target::Broadcast);
@@ -277,9 +275,18 @@ where
                 let mut sending_logic = |target| {
                     // figure out what entries we should send
                     // prefix len is the index of all the entries we have sent up to
-                    let prefix_len = state.followers.get(target).unwrap().sent_up_to;
+                    let prefix_len = state
+                        .followers
+                        .get(target)
+                        .expect("target is not a follower")
+                        .sent_up_to;
                     let entries = self.log.entries[prefix_len..self.log.entries.len()].to_vec();
-                    let prefix_term = self.log.entries.get(prefix_len - 1).unwrap().term;
+                    let prefix_term = self
+                        .log
+                        .entries
+                        .get(prefix_len - 1)
+                        .expect("target is not a follower")
+                        .term;
 
                     let rpc = RPC::AppendRequest(AppendRequest {
                         entries,
@@ -290,7 +297,9 @@ where
                         leader_last_log_term: prefix_term,
                     });
                     let msg = (Target::Single(*target), rpc);
-                    self.transport_layer.send(&msg).unwrap();
+                    self.transport_layer
+                        .send(&msg)
+                        .expect("transport failure: invalid target")
                 };
 
                 match target {
@@ -339,7 +348,9 @@ where
             vote_granted,
         });
         let msg = (Target::Single(req.candidate_id), rpc);
-        self.transport_layer.send(&msg).unwrap()
+        self.transport_layer
+            .send(&msg)
+            .expect("transport failure: invalid target")
     }
 
     /// Process an RPC response to [`rpc_vote_request`]
@@ -417,7 +428,12 @@ where
                     let prefix_len = req.leader_last_log_idx;
                     let prefix_ok = self.log.entries.len() >= prefix_len;
                     let last_log_entry_matches_terms = prefix_len == 0
-                        || (self.log.entries.get(prefix_len - 1).unwrap().term
+                        || (self
+                            .log
+                            .entries
+                            .get(prefix_len - 1)
+                            .expect("invalid leader_last_log_idx")
+                            .term
                             == req.leader_last_log_term);
 
                     if prefix_ok && last_log_entry_matches_terms {
@@ -440,7 +456,9 @@ where
                     follower_id: self.id,
                 });
                 let msg = (Target::Single(req.leader_id), rpc);
-                self.transport_layer.send(&msg).unwrap();
+                self.transport_layer
+                    .send(&msg)
+                    .expect("transport failure: invalid target")
             }
         }
     }
@@ -457,7 +475,10 @@ where
                 if res.term == self.current_term {
                     // make sure that the response was ok and the length that the follower is
                     // at is greater than what we have recorded for them before
-                    let follower_state = state.followers.get_mut(&res.follower_id).unwrap();
+                    let follower_state = state
+                        .followers
+                        .get_mut(&res.follower_id)
+                        .expect("unknown/invalid follower id");
                     if res.ok && res.ack_idx >= follower_state.acked_up_to {
                         // update replication state, we know follower has sent + acked up
                         // to `replication_state.ack_idx`
