@@ -18,6 +18,7 @@ pub type Term = u64;
 /// Type alias for the ID of a single Raft server
 pub type ServerId = usize;
 
+/// Type alias for a unit of logical time
 type Ticks = u32;
 
 /// Configuration options for a Raft server
@@ -521,7 +522,7 @@ where
 
                     if acks >= quorum_size {
                         // hit quorum! deliver last log to application and bump commit_idx
-                        self.log.deliver_msg(self.log.commit_idx);
+                        self.log.deliver_msg();
                         self.log.commit_idx += 1;
                     } else {
                         // exit early, nothing we can do except wait for more nodes to acknowledge

@@ -4,10 +4,6 @@ use std::cmp::min;
 /// Type alias for indexing into the [`Log`]
 pub type LogIndex = usize;
 
-/// Hacking a trait alias for a closure that consumes log entries
-pub trait LogConsumer<T>: FnMut(&LogEntry<T>) {}
-impl<T, F> LogConsumer<T> for F where F: FnMut(&LogEntry<T>) {}
-
 /// A single log entry
 #[derive(Clone)]
 pub struct LogEntry<T> {
@@ -32,7 +28,7 @@ pub struct Log<T, S> {
     pub last_applied: LogIndex,
 
     /// State machine
-    app: Box<dyn App<T, S>>,
+    pub app: Box<dyn App<T, S>>,
 }
 
 impl<T, S> Log<T, S> {
@@ -118,10 +114,11 @@ impl<T, S> Log<T, S> {
     }
 
     /// Deliver a single message from the message log to the application
-    pub fn deliver_msg(&mut self, msg_idx: LogIndex) {
+    pub fn deliver_msg(&mut self) {
+        let applied_idx = self.last_applied;
         self.app.transition_fn(
             self.entries
-                .get(msg_idx)
+                .get(applied_idx)
                 .expect("msg_idx of msg to be deliveres was out of bounds"),
         );
         self.last_applied += 1;
@@ -131,49 +128,4 @@ impl<T, S> Log<T, S> {
 pub trait App<T, S> {
     fn transition_fn(&mut self, entry: &LogEntry<T>);
     fn get_state(&self) -> S;
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::log::*;
-
-    pub struct CountingApp {
-        state: u32,
-    }
-
-    impl App<u32, u32> for CountingApp {
-        fn transition_fn(&mut self, entry: &LogEntry<u32>) {
-            self.state += entry.data;
-        }
-        fn get_state(&self) -> u32 {
-            self.state
-        }
-    }
-
-    fn setup() -> CountingApp {
-        CountingApp { state: 0 }
-    }
-
-    #[test]
-    fn last_term_and_index_of_empty() {
-        let app = setup();
-        let l: Log<u32, u32> = Log::new(Box::new(app));
-        assert_eq!(l.last_term(), 0);
-        assert_eq!(l.last_idx(), 0);
-        assert_eq!(l.app.get_state(), 0);
-    }
-
-    #[test]
-    fn last_term_and_index_of_non_empty() {
-        let app = setup();
-        let mut l: Log<u32, u32> = Log::new(Box::new(app));
-        l.entries.push(LogEntry { term: 0, data: 1 });
-        l.entries.push(LogEntry { term: 0, data: 2 });
-        assert_eq!(l.last_term(), 0);
-        assert_eq!(l.last_idx(), 1);
-
-        l.entries.push(LogEntry { term: 1, data: 3 });
-        assert_eq!(l.last_term(), 1);
-        assert_eq!(l.last_idx(), 2);
-    }
 }
