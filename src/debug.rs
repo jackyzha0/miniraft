@@ -1,4 +1,7 @@
-use crate::server::ServerId;
+use crate::{
+    log::{LogEntry, LogIndex},
+    server::ServerId,
+};
 use colored::Colorize;
 use core::fmt;
 use env_logger::TimestampPrecision;
@@ -6,9 +9,9 @@ use log::{debug, info, trace};
 use random_color::{Luminosity, RandomColor};
 
 pub enum Level {
-    // State transitions
+    // State transitions + RPCs
     Overview,
-    // + RPC send/receive
+    // + function calls
     Requests,
     // inner function workings
     Trace,
@@ -36,6 +39,7 @@ pub fn init_logger() {
         .format_target(false)
         .format_level(false)
         .format_timestamp(Some(TimestampPrecision::Micros))
+        .format_indent(Some(45))
         .try_init();
 }
 
@@ -63,4 +67,47 @@ pub fn debug(id: &ServerId, msg: String) {
 
 pub fn trace(id: &ServerId, msg: String) {
     log(id, msg, Level::Trace);
+}
+
+/// Internal debug message to dump contents of entries and state
+pub enum AnnotationType {
+    Index,
+    Length,
+}
+pub type Annotation = (LogIndex, AnnotationType, &'static str);
+pub fn debug_log<T: fmt::Debug>(
+    entries: &Vec<LogEntry<T>>,
+    annotations: Vec<Annotation>,
+    log_offset: LogIndex,
+) -> String {
+    let strs: Vec<String> = entries
+        .iter()
+        .map(|LogEntry { term, data }| format!("({}) {:?}", term, data))
+        .collect();
+    let first_line = format!("{}{}\n", " ".repeat(9 * log_offset), strs.join(" -> "));
+
+    let annotation_lines = annotations
+        .iter()
+        .map(|(i, annotation_type, msg)| match annotation_type {
+            AnnotationType::Index => {
+                let applied_padding = " ".repeat(9 * (i + log_offset));
+                format!("{applied_padding}    ^ {msg}")
+            }
+            AnnotationType::Length => {
+                if *i == 0 {
+                    format!("|  {msg}")
+                } else {
+                    let applied_padding = "~~~~~~~~~"
+                        .repeat(*i + log_offset)
+                        .get(0..(9 * (*i) + log_offset) - 4)
+                        .unwrap()
+                        .to_string();
+                    format!("{applied_padding}|  {msg}")
+                }
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    format!("\n{}{}", first_line, annotation_lines)
 }

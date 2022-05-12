@@ -51,7 +51,7 @@ fn apply_to_state() {
     assert_eq!(l.applied_len, 1);
     assert_eq!(l.app.get_state(), 5);
 
-    l.entries.push(LogEntry { term: 1, data: 12 });
+    l.entries.push(LogEntry { term: 1, data: 3 });
     l.entries.push(LogEntry { term: 3, data: 2 });
     assert_eq!(l.applied_len, 1);
     assert_eq!(l.app.get_state(), 5);
@@ -61,11 +61,14 @@ fn apply_to_state() {
     l.deliver_msg();
     l.deliver_msg();
     assert_eq!(l.applied_len - 1, l.last_idx());
-    assert_eq!(l.app.get_state(), 5 + 12 + 2);
+    assert_eq!(l.app.get_state(), 5 + 3 + 2);
 }
 
 #[test]
 fn append_entries_empty_no_commit() {
+    // entries: []
+    // leader entries: [|1,2,3]
+    // expected: [1,2,3]
     let mut l = setup();
     let entries = vec![
         LogEntry { term: 0, data: 1 },
@@ -96,6 +99,10 @@ fn append_entries_empty_commit() {
 
 #[test]
 fn append_entries_non_empty_no_conflict() {
+    // entries: [1,2]
+    // leader entries: [1,2|3,4,5]
+    // expected: [1,2,3,4,5]
+
     let mut l = setup();
     l.append_entries(
         0,
@@ -113,4 +120,52 @@ fn append_entries_non_empty_no_conflict() {
     assert_eq!(l.app.get_state(), 3);
     assert_eq!(l.last_idx(), 4);
     assert_eq!(l.last_term(), 1);
+}
+
+#[test]
+fn append_entries_leader_force_overwrite() {
+    // entries: [1,2,3]
+    // leader entries: [|5,7]
+    // expected: [5,7]
+    let mut l = setup();
+    l.append_entries(
+        0,
+        0,
+        vec![
+            LogEntry { term: 0, data: 1 },
+            LogEntry { term: 1, data: 2 },
+            LogEntry { term: 1, data: 3 },
+        ],
+    );
+
+    let entries = vec![LogEntry { term: 1, data: 2 }, LogEntry { term: 2, data: 5 }];
+    l.append_entries(0, 2, entries);
+    assert_eq!(l.applied_len, 2);
+    assert_eq!(l.app.get_state(), 7);
+    assert_eq!(l.last_idx(), 1);
+    assert_eq!(l.last_term(), 2);
+}
+
+#[test]
+fn append_entries_non_empty_conflict_append() {
+    // entries: [1,2,3]
+    // leader entries: [1|2,5]
+    // expected: [1,2,5]
+    let mut l = setup();
+    l.append_entries(
+        0,
+        0,
+        vec![
+            LogEntry { term: 0, data: 1 },
+            LogEntry { term: 1, data: 2 },
+            LogEntry { term: 1, data: 3 },
+        ],
+    );
+
+    let entries = vec![LogEntry { term: 1, data: 4 }, LogEntry { term: 2, data: 5 }];
+    l.append_entries(1, 3, entries);
+    assert_eq!(l.applied_len, 3);
+    assert_eq!(l.app.get_state(), 10);
+    assert_eq!(l.last_idx(), 2);
+    assert_eq!(l.last_term(), 2);
 }

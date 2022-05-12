@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Debug};
 
 use anyhow::Result;
 
@@ -18,7 +18,7 @@ pub struct ReliableTransport<'t, T, S> {
 /// Simulate a perfectly reliable transport medium that never drops packets
 impl<'t, T, S> TransportMedium<T> for ReliableTransport<'t, T, S>
 where
-    T: Clone,
+    T: Clone + Debug,
 {
     fn send(&mut self, msg: &SendableMessage<T>) -> Result<()> {
         match msg {

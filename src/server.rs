@@ -9,6 +9,7 @@ use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
     ops::Div,
 };
 
@@ -114,7 +115,7 @@ pub struct RaftServer<'s, T, S> {
 
 impl<'s, T, S> RaftServer<'s, T, S>
 where
-    T: Clone,
+    T: Clone + Debug,
 {
     pub fn new(
         id: ServerId,
@@ -513,7 +514,7 @@ where
 
                 // repeat until we have committed all entries
                 while self.log.committed_len < self.log.entries.len() {
-                    // count all nodes which have acked past what our current commit_idx is
+                    // count all nodes which have acked past what our current commit_len is
                     // +1 is to include ourselves!
                     let acks = state
                         .followers
@@ -525,7 +526,7 @@ where
                         + 1;
 
                     if acks >= quorum_size {
-                        // hit quorum! deliver last log to application and bump commit_idx
+                        // hit quorum! deliver last log to application and bump commit_len
                         self.log.deliver_msg();
                         self.log.committed_len += 1;
                     } else {
