@@ -86,10 +86,19 @@ where
         debug(
             &self.parent_id,
             format!(
-                "[append_entries] with prefix_idx={}, leader_commit_len={}, entries.len()={}",
+                "[append_entries] with prefix_idx={}, leader_commit_len={}\ncurrent state: {}\nentries to append:{}",
                 prefix_idx,
                 leader_commit_len,
-                entries.len()
+                    debug_log(
+                        &self.entries,
+                        Vec::new(),
+                        0
+                    ),
+                    debug_log(
+                        &entries,
+                        Vec::new(),
+                        prefix_idx
+                    )
             ),
         );
 
@@ -153,7 +162,7 @@ where
             trace(
                 &self.parent_id,
                 format!(
-                    "appended entries starting at idx={}, log now looks like: {}",
+                    "appended all request entries starting from idx={}, log now looks like: {}",
                     start,
                     debug_log(&self.entries, Vec::new(), 0)
                 ),

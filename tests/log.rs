@@ -165,7 +165,7 @@ fn append_entries_non_empty_conflict_append() {
     let entries = vec![LogEntry { term: 1, data: 4 }, LogEntry { term: 2, data: 5 }];
     l.append_entries(1, 3, entries);
     assert_eq!(l.applied_len, 3);
-    assert_eq!(l.app.get_state(), 10);
+    assert_eq!(l.app.get_state(), 11);
     assert_eq!(l.last_idx(), 2);
     assert_eq!(l.last_term(), 2);
 }

@@ -84,7 +84,8 @@ pub fn debug_log<T: fmt::Debug>(
         .iter()
         .map(|LogEntry { term, data }| format!("({}) {:?}", term, data))
         .collect();
-    let first_line = format!("{}{}\n", " ".repeat(9 * log_offset), strs.join(" -> "));
+    let sep = if annotations.len() > 0 { "\n" } else { "" };
+    let first_line = format!("{}{}{}", " ".repeat(9 * log_offset), strs.join(" -> "), sep);
 
     let annotation_lines = annotations
         .iter()
