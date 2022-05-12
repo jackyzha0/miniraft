@@ -1,4 +1,7 @@
-use crate::server::Term;
+use crate::{
+    debug::trace,
+    server::{ServerId, Term},
+};
 use std::cmp::min;
 
 /// Type alias for indexing into the [`Log`]
@@ -30,16 +33,20 @@ pub struct Log<T, S> {
 
     /// State machine
     pub app: Box<dyn App<T, S>>,
+
+    parent_id: ServerId,
 }
 
 impl<T, S> Log<T, S> {
     /// Instantiate a new empty event log
-    pub fn new(app: Box<dyn App<T, S>>) -> Self {
+    pub fn new(parent_id: ServerId, app: Box<dyn App<T, S>>) -> Self {
+        trace(&parent_id, "initializing log".to_owned());
         Log {
             entries: Vec::new(),
             committed_len: 0,
             applied_len: 0,
             app,
+            parent_id,
         }
     }
 
@@ -70,6 +77,16 @@ impl<T, S> Log<T, S> {
         leader_commit_idx: LogIndex,
         mut entries: Vec<LogEntry<T>>,
     ) {
+        trace(
+            &self.parent_id,
+            format!(
+                "append_entries with prefix_idx={}, leader_commit_idx={}, entries.len()={}",
+                prefix_idx,
+                leader_commit_idx,
+                entries.len()
+            ),
+        );
+
         // check to see if we need to truncate our existing log
         // this happens when we have conflicts between our log and leader's log
         // we roll back to last log entry that matches the leader
@@ -115,6 +132,15 @@ impl<T, S> Log<T, S> {
 
     /// Deliver a single message from the message log to the application
     pub fn deliver_msg(&mut self) {
+        trace(
+            &self.parent_id,
+            format!(
+                "deliver_msg at applied_idx={} out of entries.len()={}",
+                self.applied_len,
+                self.entries.len()
+            ),
+        );
+
         let applied_idx = self.applied_len;
         self.app.transition_fn(
             self.entries

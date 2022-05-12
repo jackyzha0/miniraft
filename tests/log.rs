@@ -1,4 +1,7 @@
-use miniraft::log::{App, Log, LogEntry};
+use miniraft::{
+    debug::init_logger,
+    log::{App, Log, LogEntry},
+};
 
 pub struct CountingApp {
     state: u32,
@@ -13,14 +16,15 @@ impl App<u32, u32> for CountingApp {
     }
 }
 
-fn setup() -> CountingApp {
-    CountingApp { state: 0 }
+fn setup() -> Log<u32, u32> {
+    init_logger();
+    let app = CountingApp { state: 0 };
+    Log::new(0, Box::new(app))
 }
 
 #[test]
 fn last_term_and_index_of_empty() {
-    let app = setup();
-    let l: Log<u32, u32> = Log::new(Box::new(app));
+    let l = setup();
     assert_eq!(l.last_term(), 0);
     assert_eq!(l.last_idx(), 0);
     assert_eq!(l.app.get_state(), 0);
@@ -28,8 +32,7 @@ fn last_term_and_index_of_empty() {
 
 #[test]
 fn last_term_and_index_of_non_empty() {
-    let app = setup();
-    let mut l: Log<u32, u32> = Log::new(Box::new(app));
+    let mut l = setup();
     l.entries.push(LogEntry { term: 0, data: 1 });
     l.entries.push(LogEntry { term: 0, data: 2 });
     assert_eq!(l.last_term(), 0);
@@ -42,8 +45,7 @@ fn last_term_and_index_of_non_empty() {
 
 #[test]
 fn apply_to_state() {
-    let app = setup();
-    let mut l: Log<u32, u32> = Log::new(Box::new(app));
+    let mut l = setup();
     l.entries.push(LogEntry { term: 0, data: 5 });
     l.deliver_msg();
     assert_eq!(l.applied_len, 1);
@@ -64,9 +66,7 @@ fn apply_to_state() {
 
 #[test]
 fn append_entries_empty_no_commit() {
-    let app = setup();
-    let mut l: Log<u32, u32> = Log::new(Box::new(app));
-
+    let mut l = setup();
     let entries = vec![
         LogEntry { term: 0, data: 1 },
         LogEntry { term: 0, data: 2 },
@@ -81,9 +81,7 @@ fn append_entries_empty_no_commit() {
 
 #[test]
 fn append_entries_empty_commit() {
-    let app = setup();
-    let mut l: Log<u32, u32> = Log::new(Box::new(app));
-
+    let mut l = setup();
     let entries = vec![
         LogEntry { term: 0, data: 1 },
         LogEntry { term: 0, data: 2 },
@@ -93,5 +91,26 @@ fn append_entries_empty_commit() {
     assert_eq!(l.applied_len, 2);
     assert_eq!(l.app.get_state(), 3);
     assert_eq!(l.last_idx(), 2);
+    assert_eq!(l.last_term(), 1);
+}
+
+#[test]
+fn append_entries_non_empty_no_conflict() {
+    let mut l = setup();
+    l.append_entries(
+        0,
+        2,
+        vec![LogEntry { term: 0, data: 1 }, LogEntry { term: 0, data: 2 }],
+    );
+
+    let entries = vec![
+        LogEntry { term: 0, data: 3 },
+        LogEntry { term: 0, data: 4 },
+        LogEntry { term: 1, data: 5 },
+    ];
+    l.append_entries(2, 2, entries);
+    assert_eq!(l.applied_len, 2);
+    assert_eq!(l.app.get_state(), 3);
+    assert_eq!(l.last_idx(), 4);
     assert_eq!(l.last_term(), 1);
 }

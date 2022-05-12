@@ -144,7 +144,7 @@ where
             config,
             current_term: 0,
             voted_for: None,
-            log: Log::new(app),
+            log: Log::new(id, app),
             rng,
             transport_layer,
             leadership_state: RaftLeadershipState::Follower(FollowerState {

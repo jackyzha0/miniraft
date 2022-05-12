@@ -1,5 +1,4 @@
 use crate::server::ServerId;
-use chrono::{DateTime, Utc};
 use colored::Colorize;
 use core::fmt;
 use env_logger::TimestampPrecision;
@@ -29,7 +28,8 @@ impl fmt::Display for Level {
     }
 }
 
-pub fn init() {
+pub fn init_logger() {
+    println!("");
     let _ = env_logger::builder()
         .is_test(true)
         .format_module_path(false)
@@ -45,10 +45,22 @@ pub fn log(id: &ServerId, msg: String, level: Level) {
         .seed(*id as u32)
         .to_rgb_array();
     let id_prefix = format!(" Server {} ", id).black().on_truecolor(r, g, b);
-    let fmt_msg = format!("{} {}{}\n", id_prefix, level, msg.dimmed());
+    let fmt_msg = format!("{} {}{}", id_prefix, level, msg.dimmed());
     match level {
         Level::Overview => info!("{}", fmt_msg),
         Level::Requests => debug!("{}", fmt_msg),
         Level::Trace => trace!("{}", fmt_msg),
     }
+}
+
+pub fn info(id: &ServerId, msg: String) {
+    log(id, msg, Level::Overview);
+}
+
+pub fn debug(id: &ServerId, msg: String) {
+    log(id, msg, Level::Requests);
+}
+
+pub fn trace(id: &ServerId, msg: String) {
+    log(id, msg, Level::Trace);
 }
