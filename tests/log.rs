@@ -1,4 +1,3 @@
-use miniraft::debug::*;
 use miniraft::log::{App, Log, LogEntry};
 
 pub struct CountingApp {
@@ -42,23 +41,57 @@ fn last_term_and_index_of_non_empty() {
 }
 
 #[test]
-fn apply_to_state_basic() {
+fn apply_to_state() {
     let app = setup();
     let mut l: Log<u32, u32> = Log::new(Box::new(app));
     l.entries.push(LogEntry { term: 0, data: 5 });
     l.deliver_msg();
-    assert_eq!(l.last_applied, 1);
+    assert_eq!(l.applied_len, 1);
     assert_eq!(l.app.get_state(), 5);
 
     l.entries.push(LogEntry { term: 1, data: 12 });
     l.entries.push(LogEntry { term: 3, data: 2 });
-    assert_eq!(l.last_applied, 1);
+    assert_eq!(l.applied_len, 1);
     assert_eq!(l.app.get_state(), 5);
     assert_eq!(l.last_term(), 3);
     assert_eq!(l.last_idx(), 2);
 
     l.deliver_msg();
     l.deliver_msg();
-    assert_eq!(l.last_applied, l.last_idx());
+    assert_eq!(l.applied_len - 1, l.last_idx());
     assert_eq!(l.app.get_state(), 5 + 12 + 2);
+}
+
+#[test]
+fn append_entries_empty_no_commit() {
+    let app = setup();
+    let mut l: Log<u32, u32> = Log::new(Box::new(app));
+
+    let entries = vec![
+        LogEntry { term: 0, data: 1 },
+        LogEntry { term: 0, data: 2 },
+        LogEntry { term: 1, data: 3 },
+    ];
+    l.append_entries(0, 0, entries);
+    assert_eq!(l.applied_len, 0);
+    assert_eq!(l.app.get_state(), 0);
+    assert_eq!(l.last_idx(), 2);
+    assert_eq!(l.last_term(), 1);
+}
+
+#[test]
+fn append_entries_empty_commit() {
+    let app = setup();
+    let mut l: Log<u32, u32> = Log::new(Box::new(app));
+
+    let entries = vec![
+        LogEntry { term: 0, data: 1 },
+        LogEntry { term: 0, data: 2 },
+        LogEntry { term: 1, data: 3 },
+    ];
+    l.append_entries(0, 2, entries);
+    assert_eq!(l.applied_len, 2);
+    assert_eq!(l.app.get_state(), 3);
+    assert_eq!(l.last_idx(), 2);
+    assert_eq!(l.last_term(), 1);
 }

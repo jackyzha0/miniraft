@@ -18,14 +18,15 @@ pub struct LogEntry<T> {
 pub struct Log<T, S> {
     pub entries: Vec<LogEntry<T>>,
 
-    /// Index of highest log entry known to be commited.
+    /// How much of the log has been considered committed.
     /// A log entry is considered 'safely replicated' or committed once it is replicated on a majority of servers.
     /// Only meaningful on servers which are leaders.
+    /// Initialized to 0 as no entries are committed.
+    /// Increases monotonically.
+    pub committed_len: LogIndex,
+    /// How much of the log has been applied to the state machine.
     /// Initialized to 0, increases monotonically.
-    pub commit_idx: LogIndex,
-    /// Index of highest log entry applied to state machine.
-    /// Initialized to 0, increases monotonically.
-    pub last_applied: LogIndex,
+    pub applied_len: LogIndex,
 
     /// State machine
     pub app: Box<dyn App<T, S>>,
@@ -36,8 +37,8 @@ impl<T, S> Log<T, S> {
     pub fn new(app: Box<dyn App<T, S>>) -> Self {
         Log {
             entries: Vec::new(),
-            commit_idx: 0,
-            last_applied: 0,
+            committed_len: 0,
+            applied_len: 0,
             app,
         }
     }
@@ -97,31 +98,30 @@ impl<T, S> Log<T, S> {
         }
 
         // leader has commited more messages than us, we can move forward and commit some of our messages
-        if leader_commit_idx > self.commit_idx {
+        if leader_commit_idx > self.committed_len {
             // apply each element log we haven't committed
-            self.entries[self.commit_idx..leader_commit_idx]
+            self.entries[self.committed_len..leader_commit_idx]
                 .iter()
-                .enumerate()
-                .for_each(|(i, entry)| {
+                .for_each(|entry| {
                     // apply each log entry to the state machine
                     self.app.transition_fn(entry);
-                    self.last_applied = self.commit_idx + i;
                 });
 
             // update commit index to reflect changes
-            self.commit_idx = leader_commit_idx;
+            self.applied_len = leader_commit_idx;
+            self.committed_len = leader_commit_idx;
         }
     }
 
     /// Deliver a single message from the message log to the application
     pub fn deliver_msg(&mut self) {
-        let applied_idx = self.last_applied;
+        let applied_idx = self.applied_len;
         self.app.transition_fn(
             self.entries
                 .get(applied_idx)
                 .expect("msg_idx of msg to be deliveres was out of bounds"),
         );
-        self.last_applied += 1;
+        self.applied_len += 1;
     }
 }
 

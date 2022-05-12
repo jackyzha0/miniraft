@@ -91,6 +91,8 @@ pub struct RaftServer<'s, T, S> {
     config: RaftConfig,
 
     // Persistent State
+    // In a smarter implementation, these need to be persisted to disk
+    // So we can recover these in case of a crash
     /// Current term of this node
     current_term: Term,
     /// Candidate node that we voted for this election
@@ -293,7 +295,7 @@ where
                         entries,
                         leader_id: self.id,
                         leader_term: self.current_term,
-                        leader_commit: self.log.commit_idx,
+                        leader_commit: self.log.committed_len,
                         leader_last_log_idx: prefix_len,
                         leader_last_log_term: prefix_term,
                     });
@@ -510,20 +512,22 @@ where
                 all_nodes.push(&self.id);
 
                 // repeat until we have committed all entries
-                while self.log.commit_idx < self.log.entries.len() {
+                while self.log.committed_len < self.log.entries.len() {
                     // count all nodes which have acked past what our current commit_idx is
                     // +1 is to include ourselves!
                     let acks = state
                         .followers
                         .values()
-                        .filter(|follower_state| follower_state.acked_up_to > self.log.commit_idx)
+                        .filter(|follower_state| {
+                            follower_state.acked_up_to > self.log.committed_len
+                        })
                         .count()
                         + 1;
 
                     if acks >= quorum_size {
                         // hit quorum! deliver last log to application and bump commit_idx
                         self.log.deliver_msg();
-                        self.log.commit_idx += 1;
+                        self.log.committed_len += 1;
                     } else {
                         // exit early, nothing we can do except wait for more nodes to acknowledge
                         // the entries we told them to add
