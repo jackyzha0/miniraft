@@ -1,7 +1,6 @@
 use crate::{
     log::{App, Log, LogEntry, LogIndex},
-    rpc::{AppendRequest, AppendResponse, Target, VoteRequest, VoteResponse, RPC},
-    transport::TransportMedium,
+    rpc::{AppendRequest, AppendResponse, SendableMessage, Target, VoteRequest, VoteResponse, RPC},
 };
 use anyhow::{bail, Result};
 use rand::Rng;
@@ -11,6 +10,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
     ops::Div,
+    vec,
 };
 
 /// Type alias for Raft leadership term
@@ -23,6 +23,7 @@ pub type ServerId = usize;
 type Ticks = u32;
 
 /// Configuration options for a Raft server
+#[derive(Clone)]
 pub struct RaftConfig {
     /// How long a server should wait for a message from
     /// current leader before giving up and starting an election
@@ -82,7 +83,7 @@ pub struct NodeReplicationState {
 }
 
 /// A Raft server that replicates Logs of type `T`
-pub struct RaftServer<'s, T, S> {
+pub struct RaftServer<T, S> {
     // Static State
     /// ID of this node
     id: ServerId,
@@ -108,12 +109,9 @@ pub struct RaftServer<'s, T, S> {
 
     /// Internal seeded random number generator
     rng: ChaCha8Rng,
-
-    /// Underlying message medium
-    transport_layer: &'s mut dyn TransportMedium<T>,
 }
 
-impl<'s, T, S> RaftServer<'s, T, S>
+impl<T, S> RaftServer<T, S>
 where
     T: Clone + Debug,
 {
@@ -123,7 +121,6 @@ where
         config: RaftConfig,
         seed: Option<u64>,
         app: Box<dyn App<T, S>>,
-        transport_layer: &'s mut dyn TransportMedium<T>,
     ) -> Self {
         // Create RNG generator from seed if it exists, otherwise seed from system entropy
         let mut rng = match seed {
@@ -147,7 +144,6 @@ where
             voted_for: None,
             log: Log::new(id, app),
             rng,
-            transport_layer,
             leadership_state: RaftLeadershipState::Follower(FollowerState {
                 leader: None,
                 election_time: random_election_time,
@@ -165,7 +161,7 @@ where
     }
 
     /// Tick state and perform necessary state transitions/RPC calls
-    pub fn tick(&mut self) -> &mut Self {
+    pub fn tick(&mut self) -> Vec<SendableMessage<T>> {
         use RaftLeadershipState::*;
         match &mut self.leadership_state {
             Follower(FollowerState { election_time, .. })
@@ -175,7 +171,6 @@ where
                 // suspect leader has failed, election timeout reached
                 // attempt to become candidate
                 if *election_time == 0 {
-                    // increment term
                     self.current_term += 1;
 
                     // vote for self
@@ -196,10 +191,7 @@ where
                         candidate_last_log_idx: self.log.last_idx(),
                         candidate_last_log_term: self.log.last_term(),
                     });
-                    let msg = (Target::Broadcast, rpc);
-                    self.transport_layer
-                        .send(&msg)
-                        .expect("transport failure: invalid target")
+                    return vec![(Target::Broadcast, rpc)];
                 }
             }
             Leader(state) => {
@@ -207,11 +199,13 @@ where
                 if state.heartbeat_timeout == 0 {
                     // time to next heartbeat, ping all nodes to assert our dominance
                     // and let them know we are still alive
-                    self.replicate_log(Target::Broadcast);
+                    return self.replicate_log(Target::Broadcast);
                 }
             }
         }
-        self
+
+        // fallthrough, no notable events, don't send anything
+        vec![]
     }
 
     /// Helper function to reset current state back to follower if we are behind
@@ -232,7 +226,7 @@ where
     }
 
     /// Demultiplex incoming RPC to its correct receiver function
-    pub fn receive_rpc(&mut self, rpc: &RPC<T>) {
+    pub fn receive_rpc(&mut self, rpc: &RPC<T>) -> Vec<SendableMessage<T>> {
         match rpc {
             RPC::VoteRequest(req) => self.rpc_vote_request(req),
             RPC::VoteResponse(res) => self.rpc_vote_response(res),
@@ -271,52 +265,47 @@ where
 
     /// Replicate some section of our log entries to followers.
     /// Intended to only be called when we are a Leader, do nothing otherwise
-    fn replicate_log(&mut self, target: Target) {
-        match &mut self.leadership_state {
-            RaftLeadershipState::Leader(state) => {
-                // construct closure for the sending logic so we don't need
-                // to duplicate logic
-                let mut sending_logic = |target| {
-                    // figure out what entries we should send
-                    // prefix len is the index of all the entries we have sent up to
-                    let prefix_len = state
-                        .followers
-                        .get(target)
-                        .expect("target is not a follower")
-                        .sent_up_to;
-                    let entries = self.log.entries[prefix_len..self.log.entries.len()].to_vec();
-                    let prefix_term = self
-                        .log
-                        .entries
-                        .get(prefix_len - 1)
-                        .expect("target is not a follower")
-                        .term;
+    fn replicate_log(&mut self, target: Target) -> Vec<SendableMessage<T>> {
+        if let RaftLeadershipState::Leader(state) = &mut self.leadership_state {
+            // construct closure for the sending logic so we don't need
+            // to duplicate logic
+            let sending_logic = |target| {
+                // prefix len is the index of all the entries we have sent up to
+                let prefix_len = state
+                    .followers
+                    .get(target)
+                    .expect("target is not a follower")
+                    .sent_up_to;
+                let prefix_term = self
+                    .log
+                    .entries
+                    .get(prefix_len - 1)
+                    .expect("target is not a follower")
+                    .term;
+                let entries = self.log.entries[prefix_len..self.log.entries.len()].to_vec();
 
-                    let rpc = RPC::AppendRequest(AppendRequest {
-                        entries,
-                        leader_id: self.id,
-                        leader_term: self.current_term,
-                        leader_commit: self.log.committed_len,
-                        leader_last_log_idx: prefix_len,
-                        leader_last_log_term: prefix_term,
-                    });
-                    let msg = (Target::Single(*target), rpc);
-                    self.transport_layer
-                        .send(&msg)
-                        .expect("transport failure: invalid target")
-                };
+                let rpc = RPC::AppendRequest(AppendRequest {
+                    entries,
+                    leader_id: self.id,
+                    leader_term: self.current_term,
+                    leader_commit: self.log.committed_len,
+                    leader_last_log_idx: prefix_len,
+                    leader_last_log_term: prefix_term,
+                });
+                (Target::Single(*target), rpc)
+            };
 
-                match target {
-                    Target::Single(target) => sending_logic(&target),
-                    Target::Broadcast => state.followers.keys().for_each(sending_logic),
-                }
+            match target {
+                Target::Single(target) => vec![sending_logic(&target)],
+                Target::Broadcast => state.followers.keys().map(sending_logic).collect(),
             }
-            _ => {}
+        } else {
+            vec![]
         }
     }
 
     /// Process an RPC Request to vote for requesting candidate
-    fn rpc_vote_request(&mut self, req: &VoteRequest) {
+    fn rpc_vote_request(&mut self, req: &VoteRequest) -> Vec<SendableMessage<T>> {
         if req.candidate_term > self.current_term {
             // if we are behind the other candidate, just reset to follower
             self.reset_to_follower(req.candidate_term);
@@ -351,64 +340,59 @@ where
             term: self.current_term,
             vote_granted,
         });
-        let msg = (Target::Single(req.candidate_id), rpc);
-        self.transport_layer
-            .send(&msg)
-            .expect("transport failure: invalid target")
+        vec![(Target::Single(req.candidate_id), rpc)]
     }
 
     /// Process an RPC response to [`rpc_vote_request`]
-    fn rpc_vote_response(&mut self, res: &VoteResponse) {
+    fn rpc_vote_response(&mut self, res: &VoteResponse) -> Vec<SendableMessage<T>> {
         if res.term > self.current_term {
             // if votee is ahead, we are out of date, reset to follower
             self.reset_to_follower(res.term);
         }
 
         let quorum = self.quorum_size();
-        match &mut self.leadership_state {
-            RaftLeadershipState::Candidate(state) => {
-                let up_to_date = res.term == self.current_term;
-                // only process the vote if we are a candidate, the votee is voting for
-                // our current term, and the vote was positive
-                if up_to_date && res.vote_granted {
-                    // add this to votes received
-                    state.votes_received.insert(res.votee_id);
-
-                    // if we haven't hit quorum, do nothing
-                    if state.votes_received.len() < quorum {
-                        return;
-                    }
-
-                    // otherwise, we won election! promote self to leader
-                    // initialize followers to all nodes who voted for us
-                    let mut followers = BTreeMap::new();
-                    state.votes_received.iter().for_each(|votee| {
-                        // add that votee to our list of followers
-                        followers.insert(
-                            *votee,
-                            NodeReplicationState {
-                                sent_up_to: self.log.last_idx() + 1,
-                                acked_up_to: 0,
-                            },
-                        );
-                    });
-
-                    // set state to leader
-                    self.leadership_state = RaftLeadershipState::Leader(LeaderState {
-                        followers,
-                        heartbeat_timeout: self.config.heartbeat_interval,
-                    });
-
-                    // then replicate our logs to all our followers
-                    self.replicate_log(Target::Broadcast);
+        if let RaftLeadershipState::Candidate(state) = &mut self.leadership_state {
+            let up_to_date = res.term == self.current_term;
+            // only process the vote if we are a candidate, the votee is voting for
+            // our current term, and the vote was positive
+            if up_to_date && res.vote_granted {
+                // add this to votes received
+                state.votes_received.insert(res.votee_id);
+                if state.votes_received.len() < quorum {
+                    return vec![];
                 }
+
+                // otherwise, we won election! promote self to leader
+                // initialize followers to all nodes who voted for us
+                let mut followers = BTreeMap::new();
+                state.votes_received.iter().for_each(|votee| {
+                    // add that votee to our list of followers
+                    followers.insert(
+                        *votee,
+                        NodeReplicationState {
+                            sent_up_to: self.log.last_idx() + 1,
+                            acked_up_to: 0,
+                        },
+                    );
+                });
+
+                // set state to leader
+                self.leadership_state = RaftLeadershipState::Leader(LeaderState {
+                    followers,
+                    heartbeat_timeout: self.config.heartbeat_interval,
+                });
+
+                // then replicate our logs to all our followers
+                return self.replicate_log(Target::Broadcast);
             }
-            _ => {} // do nothing if we are not a candidate
         }
+
+        // fallthrough case, do nothing
+        vec![]
     }
 
     /// Process an RPC request to append a message to the replicated event log
-    fn rpc_append_request(&mut self, req: &AppendRequest<T>) {
+    fn rpc_append_request(&mut self, req: &AppendRequest<T>) -> Vec<SendableMessage<T>> {
         // check to see if we are out of date
         if req.leader_term > self.current_term {
             self.reset_to_follower(req.leader_term);
@@ -420,7 +404,11 @@ where
                 // failure and we can go back to follower and try the request again
                 if req.leader_term == self.current_term {
                     self.reset_to_follower(req.leader_term);
-                    self.rpc_append_request(req);
+                    self.rpc_append_request(req)
+                } else {
+                    // otherwise just do nothing, only followers should response to
+                    // append_request RPCs
+                    vec![]
                 }
             }
             RaftLeadershipState::Follower(state) => {
@@ -459,46 +447,49 @@ where
                     ack_idx: self.log.entries.len(),
                     follower_id: self.id,
                 });
-                let msg = (Target::Single(req.leader_id), rpc);
-                self.transport_layer
-                    .send(&msg)
-                    .expect("transport failure: invalid target")
+                vec![(Target::Single(req.leader_id), rpc)]
             }
         }
     }
 
     /// Process an RPC response to [`rpc_append_request`]
-    fn rpc_append_response(&mut self, res: &AppendResponse) {
+    fn rpc_append_response(&mut self, res: &AppendResponse) -> Vec<SendableMessage<T>> {
         // check to see if we are out of date
         if res.term > self.current_term {
             self.reset_to_follower(res.term);
         }
 
-        match &mut self.leadership_state {
-            RaftLeadershipState::Leader(state) => {
-                if res.term == self.current_term {
-                    // make sure that the response was ok and the length that the follower is
-                    // at is greater than what we have recorded for them before
-                    let follower_state = state
-                        .followers
-                        .get_mut(&res.follower_id)
-                        .expect("unknown/invalid follower id");
-                    if res.ok && res.ack_idx >= follower_state.acked_up_to {
-                        // update replication state, we know follower has sent + acked up
-                        // to `replication_state.ack_idx`
-                        follower_state.sent_up_to = res.ack_idx;
-                        follower_state.acked_up_to = res.ack_idx;
-                        // try to formally commit these entries
-                        self.commit_log_entries();
-                    } else if follower_state.sent_up_to > 0 {
-                        // if there's a gap in the log, res.ok is not true!
-                        // reduce what we assume the client has received by one and try again
-                        follower_state.sent_up_to = follower_state.sent_up_to.saturating_sub(1);
-                        self.replicate_log(Target::Single(res.follower_id));
-                    }
+        if let RaftLeadershipState::Leader(state) = &mut self.leadership_state {
+            if res.term == self.current_term {
+                // make sure that the response was ok and the length that the follower is
+                // at is greater than what we have recorded for them before
+                let follower_state = state
+                    .followers
+                    .get_mut(&res.follower_id)
+                    .expect("unknown/invalid follower id");
+                if res.ok && res.ack_idx >= follower_state.acked_up_to {
+                    // update replication state, we know follower has sent + acked up
+                    // to `replication_state.ack_idx`
+                    follower_state.sent_up_to = res.ack_idx;
+                    follower_state.acked_up_to = res.ack_idx;
+                    // try to formally commit these entries, no need to respond
+                    self.commit_log_entries();
+                    return vec![];
+                } else if follower_state.sent_up_to > 0 {
+                    // if there's a gap in the log, res.ok is not true!
+                    // reduce what we assume the client has received by one and try again
+                    follower_state.sent_up_to = follower_state.sent_up_to.saturating_sub(1);
+                    return self.replicate_log(Target::Single(res.follower_id));
+                } else {
+                    // something is critically wrong
+                    panic!("invalid append_response received: already tried resending whole log and response still fails");
                 }
+            } else {
+                // this should never be reached, client should have updated their term when we sent the first response
+                panic!("invalid append_response received: client term should never be behind at this point");
             }
-            _ => {} // do nothing if we aren't a leader
+        } else {
+            vec![]
         }
     }
 
@@ -508,7 +499,7 @@ where
         let quorum_size = self.quorum_size();
         match &mut self.leadership_state {
             RaftLeadershipState::Leader(state) => {
-                // construct a collection of all our peers
+                // construct a collection of all nodes in system
                 let mut all_nodes: Vec<&ServerId> = self.peers.iter().collect();
                 all_nodes.push(&self.id);
 

@@ -1,26 +1,7 @@
-use miniraft::{
-    debug::init_logger,
-    log::{App, Log, LogEntry},
-};
+mod common;
+use common::*;
 
-pub struct CountingApp {
-    state: u32,
-}
-
-impl App<u32, u32> for CountingApp {
-    fn transition_fn(&mut self, entry: &LogEntry<u32>) {
-        self.state += entry.data;
-    }
-    fn get_state(&self) -> u32 {
-        self.state
-    }
-}
-
-fn setup() -> Log<u32, u32> {
-    init_logger();
-    let app = CountingApp { state: 0 };
-    Log::new(0, Box::new(app))
-}
+use miniraft::log::LogEntry;
 
 #[test]
 fn last_term_and_index_of_empty() {
@@ -66,9 +47,6 @@ fn apply_to_state() {
 
 #[test]
 fn append_entries_empty_no_commit() {
-    // entries: []
-    // leader entries: [|1,2,3]
-    // expected: [1,2,3]
     let mut l = setup();
     let entries = vec![
         LogEntry { term: 0, data: 1 },
@@ -99,10 +77,6 @@ fn append_entries_empty_commit() {
 
 #[test]
 fn append_entries_non_empty_no_conflict() {
-    // entries: [1,2]
-    // leader entries: [1,2|3,4,5]
-    // expected: [1,2,3,4,5]
-
     let mut l = setup();
     l.append_entries(
         0,
@@ -124,9 +98,6 @@ fn append_entries_non_empty_no_conflict() {
 
 #[test]
 fn append_entries_leader_force_overwrite() {
-    // entries: [1,2,3]
-    // leader entries: [|5,7]
-    // expected: [5,7]
     let mut l = setup();
     l.append_entries(
         0,
@@ -148,9 +119,6 @@ fn append_entries_leader_force_overwrite() {
 
 #[test]
 fn append_entries_non_empty_conflict_append() {
-    // entries: [1,2,3]
-    // leader entries: [1|2,5]
-    // expected: [1,2,5]
     let mut l = setup();
     l.append_entries(
         0,
@@ -165,7 +133,26 @@ fn append_entries_non_empty_conflict_append() {
     let entries = vec![LogEntry { term: 1, data: 4 }, LogEntry { term: 2, data: 5 }];
     l.append_entries(1, 3, entries);
     assert_eq!(l.applied_len, 3);
-    assert_eq!(l.app.get_state(), 11);
+    assert_eq!(l.app.get_state(), 10);
     assert_eq!(l.last_idx(), 2);
     assert_eq!(l.last_term(), 2);
+}
+
+#[test]
+fn append_entries_idempotency() {
+    let mut l = setup();
+    l.append_entries(
+        0,
+        2,
+        vec![LogEntry { term: 0, data: 1 }, LogEntry { term: 1, data: 2 }],
+    );
+    l.append_entries(
+        0,
+        2,
+        vec![LogEntry { term: 0, data: 1 }, LogEntry { term: 1, data: 2 }],
+    );
+    assert_eq!(l.applied_len, 2);
+    assert_eq!(l.app.get_state(), 3);
+    assert_eq!(l.last_idx(), 1);
+    assert_eq!(l.last_term(), 1);
 }

@@ -1,5 +1,5 @@
 use crate::{
-    debug::{debug, debug_log, info, trace, AnnotationType},
+    debug::{debug, debug_log, trace, AnnotationType},
     server::{ServerId, Term},
 };
 use std::{
@@ -46,7 +46,6 @@ where
 {
     /// Instantiate a new empty event log
     pub fn new(parent_id: ServerId, app: Box<dyn App<T, S>>) -> Self {
-        info(&parent_id, "initializing log".to_owned());
         Log {
             entries: Vec::new(),
             committed_len: 0,
@@ -89,16 +88,8 @@ where
                 "[append_entries] with prefix_idx={}, leader_commit_len={}\ncurrent state: {}\nentries to append:{}",
                 prefix_idx,
                 leader_commit_len,
-                    debug_log(
-                        &self.entries,
-                        Vec::new(),
-                        0
-                    ),
-                    debug_log(
-                        &entries,
-                        Vec::new(),
-                        prefix_idx
-                    )
+                debug_log(&self.entries, Vec::new(), 0),
+                debug_log(&entries, Vec::new(), prefix_idx)
             ),
         );
 
@@ -109,16 +100,8 @@ where
             // either the last entry in the follower's log or last entry in the
             // new logs, whichever comes first
             let rollback_to = min(self.entries.len(), prefix_idx + entries.len()) - 1;
-
-            let our_last_term = self
-                .entries
-                .get(rollback_to)
-                .expect("rollback index was out of bounds")
-                .term;
-            let leader_last_term = entries
-                .get(rollback_to - prefix_idx)
-                .expect("leader first term index was out of bounds")
-                .term;
+            let our_last_term = self.entries.get(rollback_to).unwrap().term;
+            let leader_last_term = entries.get(rollback_to - prefix_idx).unwrap().term;
             trace(
                 &self.parent_id,
                 format!(
@@ -240,6 +223,7 @@ where
     }
 }
 
+/// Describes a state machine that is updated bassed off of a feed of [`LogEntry`]
 pub trait App<T, S> {
     fn transition_fn(&mut self, entry: &LogEntry<T>);
     fn get_state(&self) -> S;
