@@ -530,6 +530,27 @@ where
             _ => {}
         }
     }
+
+    pub fn is_leader(&self) -> bool {
+        match self.leadership_state {
+            RaftLeadershipState::Leader(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_candidate(&self) -> bool {
+        match self.leadership_state {
+            RaftLeadershipState::Candidate(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_follower(&self) -> bool {
+        match self.leadership_state {
+            RaftLeadershipState::Follower(_) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Returns a random u32 uniformly from (expected)

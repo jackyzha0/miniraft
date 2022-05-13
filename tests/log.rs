@@ -5,7 +5,7 @@ use miniraft::log::LogEntry;
 
 #[test]
 fn last_term_and_index_of_empty() {
-    let l = setup();
+    let l = setup_log();
     assert_eq!(l.last_term(), 0);
     assert_eq!(l.last_idx(), 0);
     assert_eq!(l.app.get_state(), 0);
@@ -13,7 +13,7 @@ fn last_term_and_index_of_empty() {
 
 #[test]
 fn last_term_and_index_of_non_empty() {
-    let mut l = setup();
+    let mut l = setup_log();
     l.entries.push(LogEntry { term: 0, data: 1 });
     l.entries.push(LogEntry { term: 0, data: 2 });
     assert_eq!(l.last_term(), 0);
@@ -26,7 +26,7 @@ fn last_term_and_index_of_non_empty() {
 
 #[test]
 fn apply_to_state() {
-    let mut l = setup();
+    let mut l = setup_log();
     l.entries.push(LogEntry { term: 0, data: 5 });
     l.deliver_msg();
     assert_eq!(l.applied_len, 1);
@@ -47,7 +47,7 @@ fn apply_to_state() {
 
 #[test]
 fn append_entries_empty_no_commit() {
-    let mut l = setup();
+    let mut l = setup_log();
     let entries = vec![
         LogEntry { term: 0, data: 1 },
         LogEntry { term: 0, data: 2 },
@@ -62,7 +62,7 @@ fn append_entries_empty_no_commit() {
 
 #[test]
 fn append_entries_empty_commit() {
-    let mut l = setup();
+    let mut l = setup_log();
     let entries = vec![
         LogEntry { term: 0, data: 1 },
         LogEntry { term: 0, data: 2 },
@@ -77,7 +77,7 @@ fn append_entries_empty_commit() {
 
 #[test]
 fn append_entries_non_empty_no_conflict() {
-    let mut l = setup();
+    let mut l = setup_log();
     l.append_entries(
         0,
         2,
@@ -98,7 +98,7 @@ fn append_entries_non_empty_no_conflict() {
 
 #[test]
 fn append_entries_leader_force_overwrite() {
-    let mut l = setup();
+    let mut l = setup_log();
     l.append_entries(
         0,
         0,
@@ -119,7 +119,7 @@ fn append_entries_leader_force_overwrite() {
 
 #[test]
 fn append_entries_non_empty_conflict_append() {
-    let mut l = setup();
+    let mut l = setup_log();
     l.append_entries(
         0,
         0,
@@ -140,7 +140,7 @@ fn append_entries_non_empty_conflict_append() {
 
 #[test]
 fn append_entries_idempotency() {
-    let mut l = setup();
+    let mut l = setup_log();
     l.append_entries(
         0,
         2,
