@@ -1,14 +1,15 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    slice::SliceIndex,
-};
+#![allow(dead_code)]
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use miniraft::{
     debug::init_logger,
     log::{App, Log, LogEntry},
-    server::{RaftConfig, RaftLeadershipState, RaftServer, ServerId},
-    transport::ReliableTransport,
+    server::{RaftConfig, RaftServer, ServerId},
+    transport::{ReliableTransport, TransportMedium},
 };
+use rand::{RngCore, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 
 pub struct CountingApp {
     state: u32,
@@ -43,7 +44,7 @@ impl TestCluster {
         (0..n).for_each(|id| {
             peers.insert(id);
         });
-
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
         for id in peers.clone() {
             let this_id = id.to_owned();
             let mut peers_without_this = peers.clone();
@@ -54,7 +55,7 @@ impl TestCluster {
                     this_id,
                     peers_without_this,
                     config.clone(),
-                    Some(seed),
+                    Some(rng.next_u64()),
                     Box::new(CountingApp { state: 0 }),
                 ),
             );
@@ -68,9 +69,10 @@ impl TestCluster {
     }
 
     pub fn tick_by(&mut self, n: u32) -> &mut Self {
-        self.0.peers.values_mut().for_each(|peer| {
-            peer.tick();
+        (0..n).for_each(|_| {
+            let _ = self.0.tick();
         });
+
         self
     }
 

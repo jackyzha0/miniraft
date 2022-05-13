@@ -82,7 +82,8 @@ where
         leader_commit_len: LogIndex,
         mut entries: Vec<LogEntry<T>>,
     ) {
-        debug(
+        if entries.len() > 0 {
+            debug(
             &self.parent_id,
             format!(
                 "[append_entries] with prefix_idx={}, leader_commit_len={}\ncurrent state: {}\nentries to append:{}",
@@ -92,6 +93,12 @@ where
                 debug_log(&entries, Vec::new(), prefix_idx)
             ),
         );
+        } else {
+            debug(
+                &self.parent_id,
+                format!("[append_entries] heartbeat prefix_idx={}", prefix_idx),
+            );
+        }
 
         // check to see if we need to truncate our existing log
         // this happens when we have conflicts between our log and leader's log

@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter, Result};
+
 use crate::log::{LogEntry, LogIndex};
 use crate::server::{ServerId, Term};
 
@@ -67,4 +69,20 @@ pub struct AppendResponse {
     pub ack_idx: LogIndex,
     /// Follower ID
     pub follower_id: ServerId,
+}
+
+/// Display trait implementations
+impl<T> Display for RPC<T> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                RPC::VoteRequest(_) => "VoteRequest",
+                RPC::AppendRequest(_) => "AppendRequest",
+                RPC::VoteResponse(_) => "VoteResponse",
+                RPC::AppendResponse(_) => "AppendResponse",
+            }
+        )
+    }
 }

@@ -1,8 +1,10 @@
 use crate::{
+    debug::*,
     log::{App, Log, LogEntry, LogIndex},
     rpc::{AppendRequest, AppendResponse, SendableMessage, Target, VoteRequest, VoteResponse, RPC},
 };
 use anyhow::{bail, Result};
+use colored::Colorize;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
@@ -136,7 +138,7 @@ where
         );
 
         // Initialize state, set leadership state to follower
-        RaftServer {
+        let server = RaftServer {
             id,
             peers,
             config,
@@ -148,7 +150,9 @@ where
                 leader: None,
                 election_time: random_election_time,
             }),
-        }
+        };
+        server.info_with_state("initializing server".to_owned());
+        server
     }
 
     /// Helper function to generate a random election time given current configuration
@@ -167,22 +171,38 @@ where
             Follower(FollowerState { election_time, .. })
             | Candidate(CandidateState { election_time, .. }) => {
                 *election_time = election_time.saturating_sub(1);
+                // debug(&self.id, format!("[tick] election_time={}", election_time));
 
                 // suspect leader has failed, election timeout reached
                 // attempt to become candidate
                 if *election_time == 0 {
                     self.current_term += 1;
+                    trace(
+                        &self.id,
+                        "election timer expired, starting election".to_owned(),
+                    );
 
                     // vote for self
                     self.voted_for = Some(self.id);
                     let mut vote_list = BTreeSet::new();
                     vote_list.insert(self.id);
 
-                    // set state to candidate
+                    // see if we can instantly become leader
+                    // (if cluster size is 1)
+                    if 1 == self.quorum_size() {
+                        trace(
+                            &self.id,
+                            "cluster size is 1, trivially win election".to_owned(),
+                        );
+                        return self.promote_to_leader(BTreeMap::new());
+                    }
+
+                    // otherwise, become candidate
                     self.leadership_state = Candidate(CandidateState {
                         election_time: self.random_election_time(),
                         votes_received: vote_list,
                     });
+                    self.info_with_state("transition to Candidate".to_owned());
 
                     // broadcast message to all nodes asking for a vote
                     let rpc = RPC::VoteRequest(VoteRequest {
@@ -191,15 +211,21 @@ where
                         candidate_last_log_idx: self.log.last_idx(),
                         candidate_last_log_term: self.log.last_term(),
                     });
-                    return vec![(Target::Broadcast, rpc)];
+                    return self.log_outgoing_rpcs(vec![(Target::Broadcast, rpc)]);
                 }
             }
             Leader(state) => {
                 state.heartbeat_timeout = state.heartbeat_timeout.saturating_sub(1);
+                // debug(
+                //     &self.id,
+                //     format!("[tick] heartbeat_timeout={}", state.heartbeat_timeout),
+                // );
+
                 if state.heartbeat_timeout == 0 {
                     // time to next heartbeat, ping all nodes to assert our dominance
                     // and let them know we are still alive
-                    return self.replicate_log(Target::Broadcast);
+                    let msgs = self.replicate_log(Target::Broadcast);
+                    return self.log_outgoing_rpcs(msgs);
                 }
             }
         }
@@ -215,7 +241,8 @@ where
         self.leadership_state = RaftLeadershipState::Follower(FollowerState {
             leader: None, // as we are in an election
             election_time: self.random_election_time(),
-        })
+        });
+        self.info_with_state("transition to Follower".to_owned());
     }
 
     /// Calculate quorum of current set of peers.
@@ -227,12 +254,14 @@ where
 
     /// Demultiplex incoming RPC to its correct receiver function
     pub fn receive_rpc(&mut self, rpc: &RPC<T>) -> Vec<SendableMessage<T>> {
-        match rpc {
+        self.info_with_state(format!("<- {rpc}"));
+        let msgs = match rpc {
             RPC::VoteRequest(req) => self.rpc_vote_request(req),
             RPC::VoteResponse(res) => self.rpc_vote_response(res),
             RPC::AppendRequest(req) => self.rpc_append_request(req),
             RPC::AppendResponse(res) => self.rpc_append_response(res),
-        }
+        };
+        self.log_outgoing_rpcs(msgs)
     }
 
     pub fn client_request(&mut self, msg: T) -> Result<()> {
@@ -274,14 +303,13 @@ where
                 let prefix_len = state
                     .followers
                     .get(target)
-                    .expect("target is not a follower")
+                    .unwrap_or_else(|| panic!("target={} is not a follower", target))
                     .sent_up_to;
-                let prefix_term = self
-                    .log
-                    .entries
-                    .get(prefix_len - 1)
-                    .expect("target is not a follower")
-                    .term;
+                let prefix_term = if self.log.entries.len() > 0 {
+                    self.log.entries.get(prefix_len - 1).unwrap().term
+                } else {
+                    0
+                };
                 let entries = self.log.entries[prefix_len..self.log.entries.len()].to_vec();
 
                 let rpc = RPC::AppendRequest(AppendRequest {
@@ -365,30 +393,49 @@ where
                 // otherwise, we won election! promote self to leader
                 // initialize followers to all nodes who voted for us
                 let mut followers = BTreeMap::new();
-                state.votes_received.iter().for_each(|votee| {
-                    // add that votee to our list of followers
-                    followers.insert(
-                        *votee,
-                        NodeReplicationState {
-                            sent_up_to: self.log.last_idx() + 1,
-                            acked_up_to: 0,
-                        },
-                    );
-                });
-
-                // set state to leader
-                self.leadership_state = RaftLeadershipState::Leader(LeaderState {
-                    followers,
-                    heartbeat_timeout: self.config.heartbeat_interval,
-                });
-
-                // then replicate our logs to all our followers
-                return self.replicate_log(Target::Broadcast);
+                self.peers
+                    .iter()
+                    .filter(|votee| **votee != self.id)
+                    .for_each(|votee| {
+                        // add that votee to our list of followers
+                        followers.insert(
+                            *votee,
+                            NodeReplicationState {
+                                sent_up_to: self.log.last_idx(),
+                                acked_up_to: 0,
+                            },
+                        );
+                    });
+                return self.promote_to_leader(followers);
             }
         }
 
         // fallthrough case, do nothing
         vec![]
+    }
+
+    fn promote_to_leader(
+        &mut self,
+        followers: BTreeMap<ServerId, NodeReplicationState>,
+    ) -> Vec<SendableMessage<T>> {
+        let num_votes = followers.len() + 1;
+        let follower_ids: Vec<ServerId> = followers.keys().cloned().collect();
+
+        // set state to leader
+        self.leadership_state = RaftLeadershipState::Leader(LeaderState {
+            followers,
+            heartbeat_timeout: self.config.heartbeat_interval,
+        });
+
+        self.info_with_state(format!(
+            "transition to Leader with votes={} out of quorum={}",
+            num_votes,
+            self.quorum_size()
+        ));
+        self.info_with_state(format!("followers: {:?}", follower_ids));
+
+        // then replicate our logs to all our followers
+        self.replicate_log(Target::Broadcast)
     }
 
     /// Process an RPC request to append a message to the replicated event log
@@ -531,6 +578,8 @@ where
         }
     }
 
+    /// Logging helpers
+
     pub fn is_leader(&self) -> bool {
         match self.leadership_state {
             RaftLeadershipState::Leader(_) => true,
@@ -550,6 +599,32 @@ where
             RaftLeadershipState::Follower(_) => true,
             _ => false,
         }
+    }
+
+    fn info_with_state(&self, msg: String) {
+        let state_str = match self.leadership_state {
+            RaftLeadershipState::Leader(_) => " L ".on_blue(),
+            RaftLeadershipState::Candidate(_) => " C ".on_yellow(),
+            RaftLeadershipState::Follower(_) => " F ".on_truecolor(140, 140, 140),
+        };
+        let term_str = format!(" T{} ", self.current_term)
+            .bold()
+            .black()
+            .on_white();
+        info(
+            &self.id,
+            format!("{}{} {msg}", state_str.bold().black(), term_str),
+        )
+    }
+
+    fn log_outgoing_rpcs(&self, msgs: Vec<SendableMessage<T>>) -> Vec<SendableMessage<T>> {
+        msgs.iter().for_each(|msg| {
+            self.info_with_state(match &msg {
+                (Target::Single(target), rpc) => format!("{rpc} -> Server {target}"),
+                (Target::Broadcast, rpc) => format!("{rpc} -> All"),
+            })
+        });
+        msgs
     }
 }
 
