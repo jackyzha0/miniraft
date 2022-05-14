@@ -84,19 +84,22 @@ where
     ) {
         if entries.len() > 0 {
             debug(
-            &self.parent_id,
-            format!(
-                "[append_entries] with prefix_idx={}, leader_commit_len={}\ncurrent state: {}\nentries to append:{}",
-                prefix_idx,
-                leader_commit_len,
-                debug_log(&self.entries, Vec::new(), 0),
-                debug_log(&entries, Vec::new(), prefix_idx)
-            ),
-        );
+                &self.parent_id,
+                format!(
+                    "[append_entries] received with prefix_idx={}, leader_commit_len={}\ncurrent state: {}\nentries to append:{}",
+                    prefix_idx,
+                    leader_commit_len,
+                    debug_log(&self.entries, Vec::new(), 0),
+                    debug_log(&entries, Vec::new(), prefix_idx)
+                ),
+            );
         } else {
             debug(
                 &self.parent_id,
-                format!("[append_entries] heartbeat prefix_idx={}", prefix_idx),
+                format!(
+                    "[append_entries] received heartbeat prefix_idx={}",
+                    prefix_idx
+                ),
             );
         }
 
@@ -115,15 +118,14 @@ where
                     "potential log conflict! compare our terms\nour log: {}\nentries to append (attempting to insert at idx={}): {}",
                     debug_log(
                         &self.entries,
-                        vec![(rollback_to, AnnotationType::Index, "term of this entry")],
+                        vec![(AnnotationType::Index(rollback_to), "term of this entry")],
                         0,
                     ),
                     prefix_idx,
                     debug_log(
                         &entries,
                         vec![(
-                            rollback_to - prefix_idx,
-                            AnnotationType::Index,
+                            AnnotationType::Index(rollback_to - prefix_idx),
                             "term of this entry leader is trying to add"
                         )],
                         prefix_idx
@@ -161,11 +163,10 @@ where
 
         // leader has commited more messages than us, we can move forward and commit some of our messages
         if leader_commit_len > self.committed_len {
-            // apply each element log we haven't committed
+            // apply each element we haven't committed
             self.entries[self.committed_len..leader_commit_len]
                 .iter()
                 .for_each(|entry| {
-                    // apply each log entry to the state machine
                     self.app.transition_fn(entry);
                 });
 
@@ -177,13 +178,11 @@ where
                         &self.entries,
                         vec![
                             (
-                                self.committed_len,
-                                AnnotationType::Length,
+                                AnnotationType::Length(self.committed_len),
                                 "used to be commited up to here"
                             ),
                             (
-                                leader_commit_len,
-                                AnnotationType::Length,
+                                AnnotationType::Length(leader_commit_len),
                                 "now commited up to here"
                             ),
                         ],
@@ -220,8 +219,7 @@ where
             debug_log(
                 &self.entries,
                 vec![(
-                    self.applied_len,
-                    AnnotationType::Length,
+                    AnnotationType::Length(self.applied_len),
                     "applied up to here",
                 )],
                 0,

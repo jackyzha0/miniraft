@@ -1,6 +1,6 @@
 use crate::{
     log::{LogEntry, LogIndex},
-    server::ServerId,
+    server::{ServerId, Term},
 };
 use colored::Colorize;
 use core::fmt;
@@ -43,13 +43,36 @@ pub fn init_logger() {
         .try_init();
 }
 
-pub fn log(id: &ServerId, msg: String, level: Level) {
+pub fn colour_server(id: &ServerId) -> String {
     let [r, g, b] = RandomColor::new()
         .luminosity(Luminosity::Light)
-        .seed(*id as u32)
+        .seed(*id as u32 + 4)
         .to_rgb_array();
-    let id_prefix = format!(" Server {} ", id).black().on_truecolor(r, g, b);
-    let fmt_msg = format!("{} {}{}", id_prefix, level, msg.dimmed());
+    format!(" Server {} ", id)
+        .black()
+        .on_truecolor(r, g, b)
+        .to_string()
+}
+
+pub fn colour_term(term: Term) -> String {
+    format!(" Term {} ", term)
+        .bold()
+        .black()
+        .on_white()
+        .to_string()
+}
+
+pub fn colour_bool(b: bool) -> String {
+    match b {
+        true => "ok".green(),
+        false => "no".red(),
+    }
+    .bold()
+    .to_string()
+}
+
+pub fn log(id: &ServerId, msg: String, level: Level) {
+    let fmt_msg = format!("{} {}{}", colour_server(id), level, msg.dimmed());
     match level {
         Level::Overview => info!("{}", fmt_msg),
         Level::Requests => debug!("{}", fmt_msg),
@@ -71,10 +94,11 @@ pub fn trace(id: &ServerId, msg: String) {
 
 /// Internal debug message to dump contents of entries and state
 pub enum AnnotationType {
-    Index,
-    Length,
+    Index(usize),
+    Length(usize),
+    Span(usize, usize),
 }
-pub type Annotation = (LogIndex, AnnotationType, &'static str);
+pub type Annotation = (AnnotationType, &'static str);
 pub fn debug_log<T: fmt::Debug>(
     entries: &Vec<LogEntry<T>>,
     annotations: Vec<Annotation>,
@@ -89,21 +113,34 @@ pub fn debug_log<T: fmt::Debug>(
 
     let annotation_lines = annotations
         .iter()
-        .map(|(i, annotation_type, msg)| match annotation_type {
-            AnnotationType::Index => {
+        .map(|(annotation_type, msg)| match annotation_type {
+            AnnotationType::Index(i) => {
                 let applied_padding = " ".repeat(9 * (i + log_offset));
                 format!("{applied_padding}    ^ {msg}")
             }
-            AnnotationType::Length => {
-                if *i == 0 {
+            AnnotationType::Length(length) => {
+                if *length == 0 {
                     format!("|  {msg}")
                 } else {
                     let applied_padding = "~~~~~~~~~"
-                        .repeat(*i + log_offset)
-                        .get(0..(9 * (*i) + log_offset) - 4)
+                        .repeat(length + log_offset)
+                        .get(0..(9 * (length) + log_offset) - 4)
                         .unwrap()
                         .to_string();
                     format!("{applied_padding}|  {msg}")
+                }
+            }
+            AnnotationType::Span(start, end) => {
+                if end - start == 0 {
+                    format!("|  {msg}")
+                } else {
+                    let pre_padding = " ".repeat(9 * (log_offset + start));
+                    let applied_padding = "~~~~~~~~~"
+                        .repeat(end - start)
+                        .get(1..(9 * (end - start - 4)))
+                        .unwrap()
+                        .to_string();
+                    format!("{pre_padding}|{applied_padding}|  {msg}")
                 }
             }
         })
