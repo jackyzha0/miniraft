@@ -1,13 +1,18 @@
 #![allow(dead_code)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
+};
 
+use anyhow::Result;
 use miniraft::{
     debug::init_logger,
     log::{App, Log, LogEntry},
+    rpc::{SendableMessage, Target},
     server::{RaftConfig, RaftServer, ServerId},
-    transport::{ReliableTransport, TransportMedium},
 };
+
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
