@@ -1,5 +1,5 @@
 use crate::{
-    debug::{debug, debug_log, trace, AnnotationType},
+    debug::{debug_log, AnnotationType, Tracer},
     server::{ServerId, Term},
 };
 use std::{
@@ -37,7 +37,7 @@ pub struct Log<T, S> {
     /// State machine
     pub app: Box<dyn App<T, S>>,
 
-    parent_id: ServerId,
+    pub parent_id: ServerId,
 }
 
 impl<T, S> Log<T, S>
@@ -82,27 +82,7 @@ where
         leader_commit_len: LogIndex,
         mut entries: Vec<LogEntry<T>>,
     ) {
-        if entries.len() > 0 {
-            debug(
-                &self.parent_id,
-                format!(
-                    "[append_entries] received with prefix_idx={}, leader_commit_len={}\ncurrent state: {}\nentries to append:{}",
-                    prefix_idx,
-                    leader_commit_len,
-                    debug_log(&self.entries, Vec::new(), 0),
-                    debug_log(&entries, Vec::new(), prefix_idx)
-                ),
-            );
-        } else {
-            debug(
-                &self.parent_id,
-                format!(
-                    "[append_entries] received heartbeat prefix_idx={}",
-                    prefix_idx
-                ),
-            );
-        }
-
+        Tracer::append_entries_recv(&self, prefix_idx, leader_commit_len, &entries);
         // check to see if we need to truncate our existing log
         // this happens when we have conflicts between our log and leader's log
         if entries.len() > 0 && self.entries.len() > prefix_idx {
@@ -112,37 +92,12 @@ where
             let rollback_to = min(self.entries.len(), prefix_idx + entries.len()) - 1;
             let our_last_term = self.entries.get(rollback_to).unwrap().term;
             let leader_last_term = entries.get(rollback_to - prefix_idx).unwrap().term;
-            trace(
-                &self.parent_id,
-                format!(
-                    "potential log conflict! compare our terms\nour log: {}\nentries to append (attempting to insert at idx={}): {}",
-                    debug_log(
-                        &self.entries,
-                        vec![(AnnotationType::Index(rollback_to), "term of this entry")],
-                        0,
-                    ),
-                    prefix_idx,
-                    debug_log(
-                        &entries,
-                        vec![(
-                            AnnotationType::Index(rollback_to - prefix_idx),
-                            "term of this entry leader is trying to add"
-                        )],
-                        prefix_idx
-                    )
-                ),
-            );
+            Tracer::log_potential_conflict(&self, &entries, prefix_idx, rollback_to);
 
             // truncate from start to rollback_to
             if our_last_term != leader_last_term {
                 self.entries.truncate(prefix_idx);
-                trace(
-                    &self.parent_id,
-                    format!(
-                        "term conflict detected! truncating our log to length={} to match leader",
-                        self.entries.len(),
-                    ),
-                );
+                Tracer::log_term_conflict(&self);
             }
         }
 
@@ -151,14 +106,7 @@ where
             let start = self.entries.len() - prefix_idx;
             let new_entries_range = start..;
             self.entries.extend(entries.drain(new_entries_range));
-            trace(
-                &self.parent_id,
-                format!(
-                    "appended all request entries starting from idx={}, log now looks like: {}",
-                    start,
-                    debug_log(&self.entries, Vec::new(), 0)
-                ),
-            );
+            Tracer::log_append(&self, start);
         }
 
         // leader has commited more messages than us, we can move forward and commit some of our messages
@@ -170,26 +118,7 @@ where
                     self.app.transition_fn(entry);
                 });
 
-            trace(
-                &self.parent_id,
-                format!(
-                    "applied more messages to state machine: {}",
-                    debug_log(
-                        &self.entries,
-                        vec![
-                            (
-                                AnnotationType::Length(self.committed_len),
-                                "used to be commited up to here"
-                            ),
-                            (
-                                AnnotationType::Length(leader_commit_len),
-                                "now commited up to here"
-                            ),
-                        ],
-                        0
-                    ),
-                ),
-            );
+            Tracer::log_apply(&self, leader_commit_len);
             // update commit index to reflect changes
             self.applied_len = leader_commit_len;
             self.committed_len = leader_commit_len;
@@ -198,14 +127,7 @@ where
 
     /// Deliver a single message from the message log to the application
     pub fn deliver_msg(&mut self) {
-        debug(
-            &self.parent_id,
-            format!(
-                "[deliver_msg] at applied_idx={} out of entries.len()={}",
-                self.applied_len,
-                self.entries.len()
-            ),
-        );
+        Tracer::log_deliver_recv(&self);
 
         let applied_idx = self.applied_len;
         self.app.transition_fn(
@@ -214,17 +136,7 @@ where
                 .expect("msg_idx of msg to be delivered was out of bounds"),
         );
         self.applied_len += 1;
-        trace(
-            &self.parent_id,
-            debug_log(
-                &self.entries,
-                vec![(
-                    AnnotationType::Length(self.applied_len),
-                    "applied up to here",
-                )],
-                0,
-            ),
-        );
+        Tracer::log_deliver_apply(&self);
     }
 }
 

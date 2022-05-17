@@ -1,5 +1,6 @@
+/// Crate for making pretty looking outputs for testing and debugging
 use crate::{
-    log::{LogEntry, LogIndex},
+    log::{Log, LogEntry, LogIndex},
     server::{ServerId, Term},
 };
 use colored::Colorize;
@@ -7,6 +8,7 @@ use core::fmt;
 use env_logger::TimestampPrecision;
 use log::{debug, info, trace};
 use random_color::{Luminosity, RandomColor};
+use std::fmt::Debug;
 
 pub enum Level {
     // State transitions + RPCs
@@ -80,18 +82,6 @@ pub fn log(id: &ServerId, msg: String, level: Level) {
     }
 }
 
-pub fn info(id: &ServerId, msg: String) {
-    log(id, msg, Level::Overview);
-}
-
-pub fn debug(id: &ServerId, msg: String) {
-    log(id, msg, Level::Requests);
-}
-
-pub fn trace(id: &ServerId, msg: String) {
-    log(id, msg, Level::Trace);
-}
-
 /// Internal debug message to dump contents of entries and state
 pub enum AnnotationType {
     Index(usize),
@@ -148,4 +138,134 @@ pub fn debug_log<T: fmt::Debug>(
         .join("\n");
 
     format!("\n{}{}", first_line, annotation_lines)
+}
+
+pub struct Tracer {}
+impl Tracer {
+    pub fn append_entries_recv<T: Debug, S>(
+        log_ref: &Log<T, S>,
+        prefix_idx: LogIndex,
+        leader_commit_len: LogIndex,
+        their_entries: &Vec<LogEntry<T>>,
+    ) {
+        let msg = if their_entries.len() > 0 {
+            format!(
+                "[append_entries] received with prefix_idx={}, leader_commit_len={}\ncurrent state: {}\nentries to append:{}",
+                prefix_idx,
+                leader_commit_len,
+                debug_log(&log_ref.entries, Vec::new(), 0),
+                debug_log(&their_entries, Vec::new(), prefix_idx)
+            )
+        } else {
+            format!(
+                "[append_entries] received heartbeat prefix_idx={}",
+                prefix_idx
+            )
+        };
+
+        log(&log_ref.parent_id, msg, Level::Requests)
+    }
+
+    pub fn log_potential_conflict<T: Debug, S>(
+        log_ref: &Log<T, S>,
+        their_entries: &Vec<LogEntry<T>>,
+        prefix_idx: LogIndex,
+        rollback_to: LogIndex,
+    ) {
+        log(
+            &log_ref.parent_id,
+            format!(
+                "potential log conflict! compare our terms\nour log: {}\nentries to append (attempting to insert at idx={}): {}",
+                debug_log(
+                    &log_ref.entries,
+                    vec![(AnnotationType::Index(rollback_to), "term of this entry")],
+                    0,
+                ),
+                prefix_idx,
+                debug_log(
+                    &their_entries,
+                    vec![(
+                        AnnotationType::Index(rollback_to - prefix_idx),
+                        "term of this entry leader is trying to add"
+                    )],
+                    prefix_idx
+                )
+            ),
+            Level::Trace,
+        );
+    }
+
+    pub fn log_term_conflict<T: Debug, S>(log_ref: &Log<T, S>) {
+        log(
+            &log_ref.parent_id,
+            format!(
+                "term conflict detected! truncating our log to length={} to match leader",
+                log_ref.entries.len(),
+            ),
+            Level::Trace,
+        );
+    }
+
+    pub fn log_append<T: Debug, S>(log_ref: &Log<T, S>, start: LogIndex) {
+        log(
+            &log_ref.parent_id,
+            format!(
+                "appended all request entries starting from idx={}, log now looks like: {}",
+                start,
+                debug_log(&log_ref.entries, Vec::new(), 0)
+            ),
+            Level::Trace,
+        );
+    }
+
+    pub fn log_apply<T: Debug, S>(log_ref: &Log<T, S>, leader_commit_len: LogIndex) {
+        log(
+            &log_ref.parent_id,
+            format!(
+                "applied more messages to state machine: {}",
+                debug_log(
+                    &log_ref.entries,
+                    vec![
+                        (
+                            AnnotationType::Length(log_ref.committed_len),
+                            "used to be commited up to here"
+                        ),
+                        (
+                            AnnotationType::Length(leader_commit_len),
+                            "now commited up to here"
+                        ),
+                    ],
+                    0
+                ),
+            ),
+            Level::Trace,
+        )
+    }
+
+    pub fn log_deliver_recv<T: Debug, S>(log_ref: &Log<T, S>) {
+        log(
+            &log_ref.parent_id,
+            format!(
+                "[deliver_msg] at applied_idx={} out of entries.len()={}",
+                log_ref.applied_len,
+                log_ref.entries.len()
+            ),
+            Level::Requests,
+        );
+    }
+
+    pub fn log_deliver_apply<T: Debug, S>(log_ref: &Log<T, S>) {
+        log(
+            &log_ref.parent_id,
+            debug_log(
+                &log_ref.entries,
+                vec![(
+                    AnnotationType::Length(log_ref.applied_len),
+                    "applied up to here",
+                )],
+                0,
+            ),
+            Level::Trace,
+        );
+    }
 }
