@@ -1,10 +1,9 @@
 use crate::{
-    debug::*,
+    debug::Logger,
     log::{App, Log, LogEntry, LogIndex},
     rpc::{AppendRequest, AppendResponse, SendableMessage, Target, VoteRequest, VoteResponse, RPC},
 };
 use anyhow::{bail, Result};
-use colored::Colorize;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
@@ -88,7 +87,7 @@ pub struct NodeReplicationState {
 pub struct RaftServer<T, S> {
     // Static State
     /// ID of this node
-    id: ServerId,
+    pub id: ServerId,
     /// All other servers in this Raft cluster
     peers: BTreeSet<ServerId>,
     /// Config of this node
@@ -98,12 +97,12 @@ pub struct RaftServer<T, S> {
     // In a smarter implementation, these need to be persisted to disk
     // So we can recover these in case of a crash
     /// Current term of this node
-    current_term: Term,
+    pub current_term: Term,
     /// Candidate node that we voted for this election
     voted_for: Option<ServerId>,
     /// List of log entries for this node.
     /// This is the data that is being replicated
-    log: Log<T, S>,
+    pub log: Log<T, S>,
 
     /// State of the node that depends on its leadership status
     /// (one of [`FollowerState`], [`CandidateState`], or [`LeaderState`])
@@ -147,8 +146,7 @@ where
                 election_time: random_election_time,
             }),
         };
-        log(&id, "initializing server".to_owned(), Level::Overview);
-        server.log_state_update();
+        Logger::server_init(&server);
         server
     }
 
@@ -173,14 +171,7 @@ where
                 // attempt to become candidate
                 if *election_time == 0 {
                     self.current_term += 1;
-                    log(
-                        &self.id,
-                        format!(
-                            "election timer expired, bumped to {} and started election",
-                            colour_term(self.current_term)
-                        ),
-                        Level::Overview,
-                    );
+                    Logger::election_timer_expired(&self);
 
                     // vote for self
                     self.voted_for = Some(self.id);
@@ -190,11 +181,6 @@ where
                     // see if we can instantly become leader
                     // (if cluster size is 1)
                     if 1 == self.quorum_size() {
-                        log(
-                            &self.id,
-                            "cluster size is 1, trivially won election".to_owned(),
-                            Level::Trace,
-                        );
                         return self.promote_to_leader(BTreeMap::new());
                     }
 
@@ -203,7 +189,7 @@ where
                         election_time: self.random_election_time(),
                         votes_received: vote_list,
                     });
-                    self.log_state_update();
+                    Logger::state_update(&self);
 
                     // broadcast message to all nodes asking for a vote
                     let rpc = RPC::VoteRequest(VoteRequest {
@@ -212,19 +198,15 @@ where
                         candidate_last_log_idx: self.log.last_idx(),
                         candidate_last_log_term: self.log.last_term(),
                     });
-                    return self.log_outgoing_rpcs(vec![(Target::Broadcast, rpc)]);
+                    return Logger::outgoing_rpcs(&self, vec![(Target::Broadcast, rpc)]);
                 }
             }
             Leader(state) => {
                 state.heartbeat_timeout = state.heartbeat_timeout.saturating_sub(1);
                 if state.heartbeat_timeout == 0 {
-                    log(
-                        &self.id,
-                        "sending heartbeat to all followers".to_owned(),
-                        Level::Trace,
-                    );
+                    Logger::send_heartbeat(&self);
                     let msgs = self.replicate_log(Target::Broadcast);
-                    return self.log_outgoing_rpcs(msgs);
+                    return Logger::outgoing_rpcs(&self, msgs);
                 }
             }
         }
@@ -236,20 +218,12 @@ where
     /// Helper function to reset current state back to follower if we are behind
     fn reset_to_follower(&mut self, new_term: Term) {
         if new_term > self.current_term {
-            log(
-                &self.id,
-                format!(
-                    "bumping our term {} to match candidate/leader term {}",
-                    colour_term(self.current_term),
-                    colour_term(new_term)
-                ),
-                Level::Trace,
-            );
+            Logger::bumping_term(&self, new_term);
             self.current_term = new_term;
         }
         self.voted_for = None;
         if !self.is_follower() {
-            self.log_state_update();
+            Logger::state_update(&self);
         }
         self.leadership_state = RaftLeadershipState::Follower(FollowerState {
             leader: None, // as we are in an election
@@ -259,29 +233,25 @@ where
 
     /// Calculate quorum of current set of peers.
     /// quorum = ceil((peers.length + 1)/2)
-    fn quorum_size(&self) -> usize {
+    pub fn quorum_size(&self) -> usize {
         // add an extra because self.peers doesn't include self
         self.peers.len().saturating_add(2).div(2)
     }
 
     /// Demultiplex incoming RPC to its correct receiver function
     pub fn receive_rpc(&mut self, rpc: &RPC<T>) -> Vec<SendableMessage<T>> {
-        log(&self.id, format!("<- {rpc}"), Level::Overview);
+        Logger::receive_rpc(&self, &rpc);
         let msgs = match rpc {
             RPC::VoteRequest(req) => self.rpc_vote_request(req),
             RPC::VoteResponse(res) => self.rpc_vote_response(res),
             RPC::AppendRequest(req) => self.rpc_append_request(req),
             RPC::AppendResponse(res) => self.rpc_append_response(res),
         };
-        self.log_outgoing_rpcs(msgs)
+        Logger::outgoing_rpcs(&self, msgs)
     }
 
     pub fn client_request(&mut self, msg: T) -> Result<()> {
-        log(
-            &self.id,
-            "received client_request to add an entry".to_owned(),
-            Level::Overview,
-        );
+        Logger::client_request(&self);
         match &mut self.leadership_state {
             RaftLeadershipState::Leader(_) => {
                 // append log entry
@@ -329,31 +299,7 @@ where
                     0
                 };
                 let entries = self.log.entries[prefix_len..self.log.entries.len()].to_vec();
-
-                if entries.len() == 0 {
-                    log(
-                        &self.id,
-                        format!("preparing heartbeat signal to {}", colour_server(target)),
-                        Level::Trace,
-                    );
-                } else {
-                    log(
-                        &self.id,
-                        format!(
-                            "preparing RPC call to {}... replicating a portion of our log: {}",
-                            colour_server(target),
-                            debug_log(
-                                &self.log.entries,
-                                vec![(
-                                    AnnotationType::Span(prefix_len, self.log.entries.len()),
-                                    "these entries"
-                                )],
-                                0
-                            ),
-                        ),
-                        Level::Trace,
-                    );
-                }
+                Logger::replicate_entries(&self, &entries, &target, prefix_len);
 
                 let rpc = RPC::AppendRequest(AppendRequest {
                     entries,
@@ -377,14 +323,7 @@ where
 
     /// Process an RPC Request to vote for requesting candidate
     fn rpc_vote_request(&mut self, req: &VoteRequest) -> Vec<SendableMessage<T>> {
-        log(
-            &self.id,
-            format!(
-                "[rpc_vote_request] from {}",
-                colour_server(&req.candidate_id)
-            ),
-            Level::Requests,
-        );
+        Logger::rpc_vote_request(&self, req);
 
         if req.candidate_term > self.current_term {
             // if we are behind the other candidate, just reset to follower
@@ -415,17 +354,7 @@ where
         } else {
             false
         };
-        log(
-            &self.id,
-            format!(
-                "vote: {} because\n1) their log has a more recent term or is longer: {}\n2) their term is up to date: {}\n3) we haven't voted this election cycle or we already voted for them: {}",
-                colour_bool(vote_granted),
-                colour_bool(log_ok),
-                colour_bool(up_to_date),
-                colour_bool(havent_voted)
-            ),
-            Level::Trace,
-        );
+        Logger::rpc_vote_result(&self, log_ok, up_to_date, havent_voted);
         let rpc = RPC::VoteResponse(VoteResponse {
             votee_id: self.id,
             term: self.current_term,
@@ -436,15 +365,7 @@ where
 
     /// Process an RPC response to [`rpc_vote_request`]
     fn rpc_vote_response(&mut self, res: &VoteResponse) -> Vec<SendableMessage<T>> {
-        log(
-            &self.id,
-            format!(
-                "[rpc_vote_response] from {} voting {}",
-                colour_server(&res.votee_id),
-                colour_bool(res.vote_granted)
-            ),
-            Level::Requests,
-        );
+        Logger::rpc_vote_resp(&self, res);
         if res.term > self.current_term {
             // if votee is ahead, we are out of date, reset to follower
             self.reset_to_follower(res.term);
@@ -455,30 +376,13 @@ where
             let up_to_date = res.term == self.current_term;
             // only process the vote if we are a candidate, the votee is voting for
             // our current term, and the vote was positive
-            log(
-                &self.id,
-                format!(
-                    "counting vote: {} because\n1) follower is up to date: {}\n2) they granted the vote: {}",
-                    colour_bool(up_to_date && res.vote_granted),
-                    colour_bool(up_to_date),
-                    colour_bool(res.vote_granted),
-                ),
-                Level::Trace,
-            );
+            Logger::vote_count(&self.id, res, up_to_date);
             if up_to_date && res.vote_granted {
                 // add this to votes received
                 state.votes_received.insert(res.votee_id);
-                log(
-                    &self.id,
-                    format!(
-                        "total vote count: {} out of quorum of {}",
-                        state.votes_received.len(),
-                        quorum,
-                    ),
-                    Level::Trace,
-                );
-
+                Logger::total_vote_count(&self.id, state.votes_received.len(), quorum);
                 if state.votes_received.len() < quorum {
+                    // if less than quorum, do nothing
                     return vec![];
                 }
 
@@ -497,11 +401,7 @@ where
                                 acked_up_to: 0,
                             },
                         ) {
-                            None => log(
-                                &self.id,
-                                format!("added {} to list of followers", colour_server(votee)),
-                                Level::Trace,
-                            ),
+                            None => Logger::added_follower(&self, &votee),
                             _ => {}
                         };
                     });
@@ -525,21 +425,7 @@ where
             followers,
             heartbeat_timeout: self.config.heartbeat_interval,
         });
-        self.log_state_update();
-        log(
-            &self.id,
-            format!(
-                "won election with votes={} out of quorum={}, followers: {}",
-                num_votes,
-                self.quorum_size(),
-                follower_ids
-                    .iter()
-                    .map(|id| colour_server(id))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ),
-            Level::Requests,
-        );
+        Logger::won_election(&self, num_votes, &follower_ids);
 
         // then replicate our logs to all our followers
         self.replicate_log(Target::Broadcast)
@@ -547,14 +433,7 @@ where
 
     /// Process an RPC request to append a message to the replicated event log
     fn rpc_append_request(&mut self, req: &AppendRequest<T>) -> Vec<SendableMessage<T>> {
-        log(
-            &self.id,
-            format!(
-                "[rpc_append_request] from {}",
-                colour_server(&req.leader_id),
-            ),
-            Level::Requests,
-        );
+        Logger::rpc_append_request(&self, req);
 
         // check to see if we are out of date
         if req.leader_term > self.current_term {
@@ -565,49 +444,26 @@ where
             RaftLeadershipState::Candidate(_) | RaftLeadershipState::Leader(_) => {
                 // if leader is in same term as us, they have recovered from
                 // failure and we can go back to follower and try the request again
-                log(
-                    &self.id,
-                    format!(
-                        "comparing our term {} to supposed leader {}",
-                        colour_term(self.current_term),
-                        colour_term(req.leader_term)
-                    ),
-                    Level::Trace,
-                );
-
+                Logger::append_conflict_check(&self, req);
                 if req.leader_term == self.current_term {
-                    log(
-                        &self.id,
-                        format!("term matches, reset to follower, update term and retry"),
-                        Level::Trace,
-                    );
-
                     self.reset_to_follower(req.leader_term);
                     self.rpc_append_request(req)
                 } else {
                     // otherwise just do nothing, only followers should response to
                     // append_request RPCs
-                    log(&self.id, format!("outdated, ignoring"), Level::Trace);
                     vec![]
                 }
             }
             RaftLeadershipState::Follower(state) => {
                 // if leader is same term as us, we accept requester as current leader
-                log(
-                    &self.id,
-                    format!(
-                        "checking pre-req, does our term match the leader's term: {}",
-                        colour_bool(req.leader_term == self.current_term),
-                    ),
-                    Level::Trace,
-                );
+                Logger::check_matching_term(&self.id, req, self.current_term);
                 let success = if req.leader_term == self.current_term {
                     state.leader = Some(req.leader_id);
 
                     // check if we have the messages that the leader is claiming we have
                     let prefix_len = req.leader_last_log_idx;
                     let prefix_ok = self.log.entries.len() >= prefix_len;
-                    let last_log_entry_matches_terms = prefix_len == 0
+                    let last_entry_matches_terms = prefix_len == 0
                         || (self
                             .log
                             .entries
@@ -616,15 +472,8 @@ where
                             .term
                             == req.leader_last_log_term);
 
-                    log(&self.id, format!(
-                        "append entries: {} because\n1) the index they want to insert entries at ({}) <= our log length ({}): {}\n2) last log entry before new entries matches terms: {}",
-                        colour_bool(prefix_ok && last_log_entry_matches_terms),
-                        prefix_len,
-                        self.log.entries.len(),
-                        colour_bool(prefix_ok),
-                        colour_bool(last_log_entry_matches_terms)
-                    ), Level::Trace);
-                    if prefix_ok && last_log_entry_matches_terms {
+                    Logger::append_entries(&self, prefix_ok, last_entry_matches_terms, prefix_len);
+                    if prefix_ok && last_entry_matches_terms {
                         // assumptions match, append it to our local log
                         self.log
                             .append_entries(prefix_len, req.leader_commit, req.entries.clone());
@@ -650,14 +499,7 @@ where
 
     /// Process an RPC response to [`rpc_append_request`]
     fn rpc_append_response(&mut self, res: &AppendResponse) -> Vec<SendableMessage<T>> {
-        log(
-            &self.id,
-            format!(
-                "[rpc_append_response] from {}",
-                colour_server(&res.follower_id),
-            ),
-            Level::Requests,
-        );
+        Logger::append_response(&self, res);
 
         // check to see if we are out of date
         if res.term > self.current_term {
@@ -672,28 +514,12 @@ where
                     .followers
                     .get_mut(&res.follower_id)
                     .expect("unknown/invalid follower id");
-                log(
-            &self.id,
-            format!(
-                "valid response: {} because\n1) response indicated success: {}\n2) the index they acked up to (new={}) actually moved forward (old={}): {}",
-                colour_bool(res.ok && res.ack_idx >= follower_state.acked_up_to),
-                colour_bool(res.ok),
-                res.ack_idx,
-                follower_state.acked_up_to,
-                res.ack_idx >= follower_state.acked_up_to,
-            ),
-            Level::Trace,
-        );
+
+                Logger::process_append_response(&self.id, res, follower_state);
                 if res.ok && res.ack_idx >= follower_state.acked_up_to {
                     // update replication state, we know follower has sent + acked up
                     // to `replication_state.ack_idx`
-                    format!(
-                        "success! bumping sent_up_to from {} -> {} and acked_up_to from {} -> {}",
-                        follower_state.sent_up_to,
-                        res.ack_idx,
-                        follower_state.acked_up_to,
-                        res.ack_idx
-                    );
+
                     follower_state.sent_up_to = res.ack_idx;
                     follower_state.acked_up_to = res.ack_idx;
                     // try to formally commit these entries, no need to respond
@@ -702,11 +528,7 @@ where
                 } else if follower_state.sent_up_to > 0 {
                     // if there's a gap in the log, res.ok is not true!
                     // reduce what we assume the client has received by one and try again
-                    format!(
-                        "error, decrement sent_up_to from {} -> {} and try again",
-                        follower_state.sent_up_to,
-                        follower_state.sent_up_to - 1,
-                    );
+
                     follower_state.sent_up_to = follower_state.sent_up_to.saturating_sub(1);
                     return self.replicate_log(Target::Single(res.follower_id));
                 } else {
@@ -745,14 +567,7 @@ where
                         .count()
                         + 1;
 
-                    format!(
-                        "trying to commit entry at index ({}): {} because\n1) total of {} acks for that index >= quorum size ({})",
-                        self.log.committed_len,
-                        colour_bool(acks >= quorum_size),
-                        acks,
-                        quorum_size,
-                    );
-
+                    Logger::commit_entry(&self.id, self.log.committed_len, acks, quorum_size);
                     if acks >= quorum_size {
                         // hit quorum! deliver last log to application and bump commit_len
                         self.log.deliver_msg();
@@ -769,7 +584,6 @@ where
     }
 
     /// Logging helpers
-
     pub fn is_leader(&self) -> bool {
         match self.leadership_state {
             RaftLeadershipState::Leader(_) => true,
@@ -789,34 +603,6 @@ where
             RaftLeadershipState::Follower(_) => true,
             _ => false,
         }
-    }
-
-    fn log_state_update(&self) {
-        let state_str = match self.leadership_state {
-            RaftLeadershipState::Leader(_) => " Leader ".on_blue(),
-            RaftLeadershipState::Candidate(_) => " Candidate ".on_yellow(),
-            RaftLeadershipState::Follower(_) => " Follower ".on_truecolor(140, 140, 140),
-        }
-        .bold()
-        .black()
-        .to_string();
-        log(&self.id, format!("is now {}", state_str), Level::Overview);
-    }
-
-    fn log_outgoing_rpcs(&self, msgs: Vec<SendableMessage<T>>) -> Vec<SendableMessage<T>> {
-        msgs.iter().for_each(|msg| {
-            log(
-                &self.id,
-                match &msg {
-                    (Target::Single(target), rpc) => format!("{rpc} -> {}", colour_server(target)),
-                    (Target::Broadcast, rpc) => {
-                        format!("{rpc} -> {}", " All servers ".bold().black().on_white())
-                    }
-                },
-                Level::Overview,
-            )
-        });
-        msgs
     }
 }
 

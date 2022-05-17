@@ -1,7 +1,8 @@
 /// Crate for making pretty looking outputs for testing and debugging
 use crate::{
     log::{Log, LogEntry, LogIndex},
-    server::{ServerId, Term},
+    rpc::{AppendRequest, AppendResponse, SendableMessage, Target, VoteRequest, VoteResponse, RPC},
+    server::{NodeReplicationState, RaftServer, ServerId, Term},
 };
 use colored::Colorize;
 use core::fmt;
@@ -140,8 +141,8 @@ pub fn debug_log<T: fmt::Debug>(
     format!("\n{}{}", first_line, annotation_lines)
 }
 
-pub struct Tracer {}
-impl Tracer {
+pub struct Logger {}
+impl Logger {
     pub fn append_entries_recv<T: Debug, S>(
         log_ref: &Log<T, S>,
         prefix_idx: LogIndex,
@@ -267,5 +268,341 @@ impl Tracer {
             ),
             Level::Trace,
         );
+    }
+
+    pub fn server_init<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>) {
+        log(
+            &raft_ref.id,
+            "initializing server".to_owned(),
+            Level::Overview,
+        );
+        Self::state_update(raft_ref);
+    }
+
+    pub fn state_update<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>) {
+        let state_str = if raft_ref.is_leader() {
+            " Leader ".on_blue()
+        } else if raft_ref.is_candidate() {
+            " Candidate ".on_yellow()
+        } else {
+            " Follower ".on_truecolor(140, 140, 140)
+        }
+        .bold()
+        .black()
+        .to_string();
+        log(
+            &raft_ref.id,
+            format!("is now {}", state_str),
+            Level::Overview,
+        );
+    }
+
+    pub fn won_election<T: Debug + Clone, S>(
+        raft_ref: &RaftServer<T, S>,
+        num_votes: usize,
+        follower_ids: &Vec<ServerId>,
+    ) {
+        Self::state_update(raft_ref);
+        log(
+            &raft_ref.id,
+            format!(
+                "won election with votes={} out of quorum={}, followers: {}",
+                num_votes,
+                raft_ref.quorum_size(),
+                follower_ids
+                    .iter()
+                    .map(|id| colour_server(id))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Level::Requests,
+        );
+    }
+
+    pub fn send_heartbeat<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>) {
+        log(
+            &raft_ref.id,
+            "sending heartbeat to all followers".to_owned(),
+            Level::Trace,
+        );
+    }
+
+    pub fn election_timer_expired<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>) {
+        log(
+            &raft_ref.id,
+            format!(
+                "election timer expired, bumped to {} and started election",
+                colour_term(raft_ref.current_term)
+            ),
+            Level::Overview,
+        );
+    }
+
+    pub fn outgoing_rpcs<T: Debug + Clone, S>(
+        raft_ref: &RaftServer<T, S>,
+        msgs: Vec<SendableMessage<T>>,
+    ) -> Vec<SendableMessage<T>> {
+        msgs.iter().for_each(|msg| {
+            log(
+                &raft_ref.id,
+                match &msg {
+                    (Target::Single(target), rpc) => format!("{rpc} -> {}", colour_server(target)),
+                    (Target::Broadcast, rpc) => {
+                        format!("{rpc} -> {}", " All servers ".bold().black().on_white())
+                    }
+                },
+                Level::Overview,
+            )
+        });
+        msgs
+    }
+
+    pub fn check_matching_term<T>(id: &ServerId, req: &AppendRequest<T>, current_term: Term) {
+        log(
+            id,
+            format!(
+                "checking pre-req, does our term match the leader's term: {}",
+                colour_bool(req.leader_term == current_term),
+            ),
+            Level::Trace,
+        );
+    }
+
+    pub fn bumping_term<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, new_term: Term) {
+        log(
+            &raft_ref.id,
+            format!(
+                "bumping our term {} to match candidate/leader term {}",
+                colour_term(raft_ref.current_term),
+                colour_term(new_term)
+            ),
+            Level::Trace,
+        );
+    }
+
+    pub fn receive_rpc<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, rpc: &RPC<T>) {
+        log(&raft_ref.id, format!("<- {rpc}"), Level::Overview);
+    }
+
+    pub fn client_request<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>) {
+        log(
+            &raft_ref.id,
+            "received client_request to add an entry".to_owned(),
+            Level::Overview,
+        );
+    }
+
+    pub fn replicate_entries<T: Debug + Clone, S>(
+        raft_ref: &RaftServer<T, S>,
+        entries: &Vec<LogEntry<T>>,
+        target: &ServerId,
+        prefix_len: LogIndex,
+    ) {
+        if entries.len() == 0 {
+            log(
+                &raft_ref.id,
+                format!("preparing heartbeat signal to {}", colour_server(target)),
+                Level::Trace,
+            );
+        } else {
+            log(
+                &raft_ref.id,
+                format!(
+                    "preparing RPC call to {}... replicating a portion of our log: {}",
+                    colour_server(target),
+                    debug_log(
+                        &raft_ref.log.entries,
+                        vec![(
+                            AnnotationType::Span(prefix_len, raft_ref.log.entries.len()),
+                            "these entries"
+                        )],
+                        0
+                    ),
+                ),
+                Level::Trace,
+            );
+        }
+    }
+
+    pub fn rpc_vote_request<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, req: &VoteRequest) {
+        log(
+            &raft_ref.id,
+            format!(
+                "[rpc_vote_request] from {}",
+                colour_server(&req.candidate_id)
+            ),
+            Level::Requests,
+        );
+    }
+
+    pub fn rpc_vote_result<T: Debug + Clone, S>(
+        raft_ref: &RaftServer<T, S>,
+        log_ok: bool,
+        up_to_date: bool,
+        havent_voted: bool,
+    ) {
+        log(
+            &raft_ref.id,
+            format!(
+                "vote: {} because\n1) their log has a more recent term or is longer: {}\n2) their term is up to date: {}\n3) we haven't voted this election cycle or we already voted for them: {}",
+                colour_bool(log_ok && up_to_date && havent_voted),
+                colour_bool(log_ok),
+                colour_bool(up_to_date),
+                colour_bool(havent_voted)
+            ),
+            Level::Trace,
+        );
+    }
+
+    pub fn rpc_vote_resp<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, res: &VoteResponse) {
+        log(
+            &raft_ref.id,
+            format!(
+                "[rpc_vote_response] from {} voting {}",
+                colour_server(&res.votee_id),
+                colour_bool(res.vote_granted)
+            ),
+            Level::Requests,
+        );
+    }
+
+    pub fn vote_count(id: &ServerId, res: &VoteResponse, up_to_date: bool) {
+        log(
+            id,
+            format!(
+                "counting vote: {} because\n1) follower is up to date: {}\n2) they granted the vote: {}",
+                colour_bool(up_to_date && res.vote_granted),
+                colour_bool(up_to_date),
+                colour_bool(res.vote_granted),
+            ),
+            Level::Trace,
+        );
+    }
+
+    pub fn total_vote_count(id: &ServerId, total: usize, quorum: usize) {
+        log(
+            id,
+            format!("total vote count: {} out of quorum of {}", total, quorum,),
+            Level::Trace,
+        );
+    }
+
+    pub fn added_follower<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, votee: &ServerId) {
+        log(
+            &raft_ref.id,
+            format!("added {} to list of followers", colour_server(votee)),
+            Level::Trace,
+        )
+    }
+
+    pub fn rpc_append_request<T: Debug + Clone, S>(
+        raft_ref: &RaftServer<T, S>,
+        req: &AppendRequest<T>,
+    ) {
+        log(
+            &raft_ref.id,
+            format!(
+                "[rpc_append_request] from {}",
+                colour_server(&req.leader_id),
+            ),
+            Level::Requests,
+        );
+    }
+
+    pub fn append_conflict_check<T: Debug + Clone, S>(
+        raft_ref: &RaftServer<T, S>,
+        req: &AppendRequest<T>,
+    ) {
+        log(
+            &raft_ref.id,
+            format!(
+                "comparing our term {} to supposed leader {}",
+                colour_term(raft_ref.current_term),
+                colour_term(req.leader_term)
+            ),
+            Level::Trace,
+        );
+
+        if req.leader_term == raft_ref.current_term {
+            log(
+                &raft_ref.id,
+                format!("term matches, reset to follower, update term and retry"),
+                Level::Trace,
+            );
+        } else {
+            log(&raft_ref.id, format!("outdated, ignoring"), Level::Trace);
+        }
+    }
+
+    pub fn append_entries<T: Debug + Clone, S>(
+        raft_ref: &RaftServer<T, S>,
+        prefix_ok: bool,
+        last_log_entry_matches_terms: bool,
+        prefix_len: usize,
+    ) {
+        log(&raft_ref.id, format!(
+            "append entries: {} because\n1) the index they want to insert entries at ({}) <= our log length ({}): {}\n2) last log entry before new entries matches terms: {}",
+            colour_bool(prefix_ok && last_log_entry_matches_terms),
+            prefix_len,
+            raft_ref.log.entries.len(),
+            colour_bool(prefix_ok),
+            colour_bool(last_log_entry_matches_terms)
+        ), Level::Trace);
+    }
+
+    pub fn append_response<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, res: &AppendResponse) {
+        log(
+            &raft_ref.id,
+            format!(
+                "[rpc_append_response] from {}",
+                colour_server(&res.follower_id),
+            ),
+            Level::Requests,
+        );
+    }
+
+    pub fn process_append_response(
+        id: &ServerId,
+        res: &AppendResponse,
+        follower_state: &NodeReplicationState,
+    ) {
+        let valid = res.ok && res.ack_idx >= follower_state.acked_up_to;
+        log(
+            id,
+            format!(
+                "valid response: {} because\n1) response indicated success: {}\n2) the index they acked up to (new={}) actually moved forward (old={}): {}",
+                colour_bool(valid),
+                colour_bool(res.ok),
+                res.ack_idx,
+                follower_state.acked_up_to,
+                res.ack_idx >= follower_state.acked_up_to,
+            ),
+            Level::Trace,
+        );
+
+        let msg = if valid {
+            format!(
+                "success! bumping sent_up_to from {} -> {} and acked_up_to from {} -> {}",
+                follower_state.sent_up_to, res.ack_idx, follower_state.acked_up_to, res.ack_idx
+            )
+        } else {
+            format!(
+                "error, decrement sent_up_to from {} -> {} and try again",
+                follower_state.sent_up_to,
+                follower_state.sent_up_to - 1,
+            )
+        };
+
+        log(id, msg, Level::Trace)
+    }
+
+    pub fn commit_entry(id: &ServerId, commit_len: LogIndex, acks: usize, quorum_size: usize) {
+        log(id, format!(
+            "commit entry at index ({}): {} because\n1) total of {} acks for that index >= quorum size ({})",
+            commit_len,
+            colour_bool(acks >= quorum_size),
+            acks,
+            quorum_size,
+        ), Level::Trace);
     }
 }

@@ -1,5 +1,5 @@
 use crate::{
-    debug::{debug_log, AnnotationType, Tracer},
+    debug::Logger,
     server::{ServerId, Term},
 };
 use std::{
@@ -82,7 +82,7 @@ where
         leader_commit_len: LogIndex,
         mut entries: Vec<LogEntry<T>>,
     ) {
-        Tracer::append_entries_recv(&self, prefix_idx, leader_commit_len, &entries);
+        Logger::append_entries_recv(&self, prefix_idx, leader_commit_len, &entries);
         // check to see if we need to truncate our existing log
         // this happens when we have conflicts between our log and leader's log
         if entries.len() > 0 && self.entries.len() > prefix_idx {
@@ -92,12 +92,12 @@ where
             let rollback_to = min(self.entries.len(), prefix_idx + entries.len()) - 1;
             let our_last_term = self.entries.get(rollback_to).unwrap().term;
             let leader_last_term = entries.get(rollback_to - prefix_idx).unwrap().term;
-            Tracer::log_potential_conflict(&self, &entries, prefix_idx, rollback_to);
+            Logger::log_potential_conflict(&self, &entries, prefix_idx, rollback_to);
 
             // truncate from start to rollback_to
             if our_last_term != leader_last_term {
                 self.entries.truncate(prefix_idx);
-                Tracer::log_term_conflict(&self);
+                Logger::log_term_conflict(&self);
             }
         }
 
@@ -106,7 +106,7 @@ where
             let start = self.entries.len() - prefix_idx;
             let new_entries_range = start..;
             self.entries.extend(entries.drain(new_entries_range));
-            Tracer::log_append(&self, start);
+            Logger::log_append(&self, start);
         }
 
         // leader has commited more messages than us, we can move forward and commit some of our messages
@@ -118,7 +118,7 @@ where
                     self.app.transition_fn(entry);
                 });
 
-            Tracer::log_apply(&self, leader_commit_len);
+            Logger::log_apply(&self, leader_commit_len);
             // update commit index to reflect changes
             self.applied_len = leader_commit_len;
             self.committed_len = leader_commit_len;
@@ -127,7 +127,7 @@ where
 
     /// Deliver a single message from the message log to the application
     pub fn deliver_msg(&mut self) {
-        Tracer::log_deliver_recv(&self);
+        Logger::log_deliver_recv(&self);
 
         let applied_idx = self.applied_len;
         self.app.transition_fn(
@@ -136,7 +136,7 @@ where
                 .expect("msg_idx of msg to be delivered was out of bounds"),
         );
         self.applied_len += 1;
-        Tracer::log_deliver_apply(&self);
+        Logger::log_deliver_apply(&self);
     }
 }
 
