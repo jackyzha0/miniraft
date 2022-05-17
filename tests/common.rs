@@ -1,9 +1,6 @@
 #![allow(dead_code)]
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt::Debug,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use miniraft::{
@@ -35,80 +32,13 @@ pub fn setup_log() -> Log<u32, u32> {
     Log::new(0, Box::new(app))
 }
 
-pub struct TestCluster(ReliableTransport<u32, u32>);
-
-impl TestCluster {
-    pub fn new(n: usize, seed: u64, config: RaftConfig) -> Self {
-        init_logger();
-
-        let mut cluster = TestCluster(ReliableTransport {
-            peers: BTreeMap::new(),
-            msg_queue: Vec::new(),
-        });
-        let mut peers: BTreeSet<ServerId> = BTreeSet::new();
-        (0..n).for_each(|id| {
-            peers.insert(id);
-        });
-        let mut rng = ChaCha8Rng::seed_from_u64(seed);
-        for id in peers.clone() {
-            let this_id = id.to_owned();
-            let mut peers_without_this = peers.clone();
-            peers_without_this.remove(&this_id);
-            cluster.0.peers.insert(
-                this_id,
-                RaftServer::new(
-                    this_id,
-                    peers_without_this,
-                    config.clone(),
-                    Some(rng.next_u64()),
-                    Box::new(CountingApp { state: 0 }),
-                ),
-            );
-        }
-
-        cluster
-    }
-
-    pub fn get_by_id(&self, id: ServerId) -> &RaftServer<u32, u32> {
-        self.0.peers.get(&id).unwrap()
-    }
-
-    pub fn tick_by(&mut self, n: u32) -> &mut Self {
-        (0..n).for_each(|_| {
-            let _ = self.0.tick();
-        });
-
-        self
-    }
-
-    pub fn has_leader(&self) -> bool {
-        self.0.peers.values().any(|peer| peer.is_leader())
-    }
-
-    pub fn has_candidate(&self) -> bool {
-        self.0.peers.values().any(|peer| peer.is_candidate())
-    }
-
-    pub fn get_leader(&self) -> Option<&RaftServer<u32, u32>> {
-        self.0.peers.values().filter(|peer| peer.is_leader()).last()
-    }
-}
-
-pub trait TransportMedium<T> {
-    /// Returns how many messages were passed in that tick
-    fn tick(&mut self) -> Result<usize>;
-}
-
-pub struct ReliableTransport<T, S> {
-    pub msg_queue: Vec<SendableMessage<T>>,
-    pub peers: BTreeMap<ServerId, RaftServer<T, S>>,
+pub struct TestCluster {
+    pub msg_queue: Vec<SendableMessage<u32>>,
+    pub peers: BTreeMap<ServerId, RaftServer<u32, u32>>,
 }
 
 /// Simulate a perfectly reliable transport medium that never drops packets
-impl<T, S> TransportMedium<T> for ReliableTransport<T, S>
-where
-    T: Clone + Debug,
-{
+impl TestCluster {
     fn tick(&mut self) -> Result<usize> {
         let old_msg_q_size = self.msg_queue.len();
 
@@ -120,7 +50,7 @@ where
 
         // send all things in msg queue
         let num_messages = self.msg_queue.len() - old_msg_q_size;
-        let messages_to_send: Vec<SendableMessage<T>> = self.msg_queue.drain(..).collect();
+        let messages_to_send: Vec<SendableMessage<u32>> = self.msg_queue.drain(..).collect();
         messages_to_send.iter().for_each(|msg| match msg {
             (Target::Single(target), rpc) => {
                 // get target peer, return an error if its not found
@@ -138,5 +68,60 @@ where
         });
 
         Ok(num_messages)
+    }
+
+    pub fn new(n: usize, seed: u64, config: RaftConfig) -> Self {
+        init_logger();
+
+        let mut cluster = TestCluster {
+            peers: BTreeMap::new(),
+            msg_queue: Vec::new(),
+        };
+        let mut peers: BTreeSet<ServerId> = BTreeSet::new();
+        (0..n).for_each(|id| {
+            peers.insert(id);
+        });
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        for id in peers.clone() {
+            let this_id = id.to_owned();
+            let mut peers_without_this = peers.clone();
+            peers_without_this.remove(&this_id);
+            cluster.peers.insert(
+                this_id,
+                RaftServer::new(
+                    this_id,
+                    peers_without_this,
+                    config.clone(),
+                    Some(rng.next_u64()),
+                    Box::new(CountingApp { state: 0 }),
+                ),
+            );
+        }
+
+        cluster
+    }
+
+    pub fn get_by_id(&self, id: ServerId) -> &RaftServer<u32, u32> {
+        self.peers.get(&id).unwrap()
+    }
+
+    pub fn tick_by(&mut self, n: u32) -> &mut Self {
+        (0..n).for_each(|_| {
+            let _ = self.tick();
+        });
+
+        self
+    }
+
+    pub fn has_leader(&self) -> bool {
+        self.peers.values().any(|peer| peer.is_leader())
+    }
+
+    pub fn has_candidate(&self) -> bool {
+        self.peers.values().any(|peer| peer.is_candidate())
+    }
+
+    pub fn get_leader(&self) -> Option<&RaftServer<u32, u32>> {
+        self.peers.values().filter(|peer| peer.is_leader()).last()
     }
 }
