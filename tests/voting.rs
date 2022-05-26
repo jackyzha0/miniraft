@@ -10,7 +10,7 @@ const DEFAULT_CFG: RaftConfig = RaftConfig {
 };
 
 const MAX_WAIT: u32 = DEFAULT_CFG.election_timeout + DEFAULT_CFG.election_timeout_jitter;
-const MAX_TICKS: u32 = 5000;
+const MAX_TICKS: u32 = 1_000;
 
 #[test]
 fn trivial_case_one_server_remains_leader() {

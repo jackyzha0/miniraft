@@ -33,36 +33,64 @@ pub fn setup_log() -> Log<u32, u32> {
 }
 
 pub struct TestCluster {
-    pub msg_queue: Vec<SendableMessage<u32>>,
+    pub msg_queue: Vec<(ServerId, SendableMessage<u32>)>,
     pub peers: BTreeMap<ServerId, RaftServer<u32, u32>>,
+    pub drop_connections: BTreeSet<(Target, Target)>,
+    pub down: BTreeSet<ServerId>,
 }
 
 /// Simulate a perfectly reliable transport medium that never drops packets
 impl TestCluster {
+    fn drop_between(&mut self, t1: Target, t2: Target) {
+        self.drop_connections.insert((t1, t2));
+    }
+
+    fn isolate(&mut self, t: ServerId) {
+        self.drop_connections
+            .insert((Target::Single(t), Target::Broadcast));
+        self.drop_connections
+            .insert((Target::Broadcast, Target::Single(t)));
+    }
+
+    fn kill(&mut self, t: ServerId) {
+        self.down.insert(t);
+    }
+
+    fn wrap_with_sender(
+        from: ServerId,
+        msgs: Vec<SendableMessage<u32>>,
+    ) -> Vec<(ServerId, SendableMessage<u32>)> {
+        msgs.into_iter().map(|msg| (from, msg)).collect()
+    }
+
     fn tick(&mut self) -> Result<usize> {
         let old_msg_q_size = self.msg_queue.len();
 
-        // iterate all peers and tick
-        self.peers.values_mut().for_each(|peer| {
-            let new_msgs = peer.tick();
-            self.msg_queue.extend(new_msgs);
-        });
+        // iterate all peers which are alive and tick
+        self.peers
+            .values_mut()
+            .filter(|peer| !self.down.contains(&peer.id))
+            .for_each(|peer| {
+                let new_msgs = Self::wrap_with_sender(peer.id, peer.tick());
+                self.msg_queue.extend(new_msgs);
+            });
 
         // send all things in msg queue
         let num_messages = self.msg_queue.len() - old_msg_q_size;
-        let messages_to_send: Vec<SendableMessage<u32>> = self.msg_queue.drain(..).collect();
-        messages_to_send.iter().for_each(|msg| match msg {
-            (Target::Single(target), rpc) => {
+        let messages_to_send: Vec<(ServerId, SendableMessage<u32>)> =
+            self.msg_queue.drain(..).collect();
+        messages_to_send.iter().for_each(|(from, msg)| match msg {
+            (t @ Target::Single(target), rpc) => {
                 // get target peer, return an error if its not found
                 let peer = self.peers.get_mut(&target).expect("peer not found");
-                let new_msgs = peer.receive_rpc(&rpc);
+                let new_msgs = Self::wrap_with_sender(peer.id, peer.receive_rpc(&rpc));
                 self.msg_queue.extend(new_msgs);
             }
             (Target::Broadcast, rpc) => {
                 // broadcast this message to all peers
                 self.peers
                     .values_mut()
-                    .map(|peer| peer.receive_rpc(&rpc))
+                    .map(|peer| Self::wrap_with_sender(peer.id, peer.receive_rpc(&rpc)))
                     .for_each(|new_msgs| self.msg_queue.extend(new_msgs));
             }
         });
@@ -76,6 +104,8 @@ impl TestCluster {
         let mut cluster = TestCluster {
             peers: BTreeMap::new(),
             msg_queue: Vec::new(),
+            drop_connections: BTreeSet::new(),
+            down: BTreeSet::new(),
         };
         let mut peers: BTreeSet<ServerId> = BTreeSet::new();
         (0..n).for_each(|id| {

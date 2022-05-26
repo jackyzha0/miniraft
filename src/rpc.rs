@@ -7,6 +7,7 @@ use crate::server::{ServerId, Term};
 pub type SendableMessage<T> = (Target, RPC<T>);
 
 /// Whether to send a message to everyone or just a single node
+#[derive(Eq, PartialEq, PartialOrd, Ord)]
 pub enum Target {
     Single(ServerId),
     Broadcast,

@@ -387,7 +387,7 @@ where
                 }
 
                 // otherwise, we won election! promote self to leader
-                // initialize followers to all nodes who voted for us
+                // initialize followers to all nodes except for ourselves
                 let mut followers = BTreeMap::new();
                 self.peers
                     .iter()
