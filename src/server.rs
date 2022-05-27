@@ -73,6 +73,7 @@ pub struct LeaderState {
 }
 
 /// State of a single Node as tracked by a leader
+#[derive(Default)]
 pub struct NodeReplicationState {
     /// Index of next log entry to send to that server.
     /// Initialized to leader's last log index + 1
@@ -413,7 +414,7 @@ where
         vec![]
     }
 
-    fn promote_to_leader(
+    pub fn promote_to_leader(
         &mut self,
         followers: BTreeMap<ServerId, NodeReplicationState>,
     ) -> Vec<SendableMessage<T>> {

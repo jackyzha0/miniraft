@@ -131,8 +131,8 @@ impl TestCluster {
         cluster
     }
 
-    pub fn get_by_id(&self, id: ServerId) -> &RaftServer<u32, u32> {
-        self.peers.get(&id).unwrap()
+    pub fn get_by_id(&mut self, id: ServerId) -> &mut RaftServer<u32, u32> {
+        self.peers.get_mut(&id).unwrap()
     }
 
     pub fn tick_by(&mut self, n: u32) -> &mut Self {
@@ -143,13 +143,12 @@ impl TestCluster {
         self
     }
 
-    pub fn has_n_leaders(&self, n: usize) -> bool {
+    pub fn num_leaders(&self) -> usize {
         self.peers
             .values()
             .filter(|peer| peer.is_leader())
             .collect::<Vec<_>>()
             .len()
-            == n
     }
 
     pub fn has_candidate(&self) -> bool {
