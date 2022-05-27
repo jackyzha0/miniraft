@@ -440,6 +440,8 @@ where
             self.reset_to_follower(req.leader_term);
         }
 
+        // pre-pick a new election time for if we revert to follower
+        let random_election_time = self.random_election_time();
         match &mut self.leadership_state {
             RaftLeadershipState::Candidate(_) | RaftLeadershipState::Leader(_) => {
                 // if leader is in same term as us, they have recovered from
@@ -458,6 +460,7 @@ where
                 // if leader is same term as us, we accept requester as current leader
                 Logger::check_matching_term(&self.id, req, self.current_term);
                 let success = if req.leader_term == self.current_term {
+                    state.election_time = random_election_time;
                     state.leader = Some(req.leader_id);
 
                     // check if we have the messages that the leader is claiming we have

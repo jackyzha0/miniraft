@@ -7,7 +7,7 @@ use miniraft::{
     debug::init_logger,
     log::{App, Log, LogEntry},
     rpc::{SendableMessage, Target},
-    server::{RaftConfig, RaftServer, ServerId},
+    server::{RaftConfig, RaftServer, ServerId, Term},
 };
 
 use rand::{RngCore, SeedableRng};
@@ -35,32 +35,25 @@ pub fn setup_log() -> Log<u32, u32> {
 pub struct TestCluster {
     pub msg_queue: Vec<(ServerId, SendableMessage<u32>)>,
     pub peers: BTreeMap<ServerId, RaftServer<u32, u32>>,
-    pub drop_connections: BTreeSet<(Target, Target)>,
+    pub drop_connections: BTreeSet<(ServerId, ServerId)>,
     pub down: BTreeSet<ServerId>,
 }
 
 /// Simulate a perfectly reliable transport medium that never drops packets
 impl TestCluster {
-    fn drop_between(&mut self, t1: Target, t2: Target) {
+    pub fn drop_between(&mut self, t1: ServerId, t2: ServerId) {
         self.drop_connections.insert((t1, t2));
     }
-
-    fn isolate(&mut self, t: ServerId) {
-        self.drop_connections
-            .insert((Target::Single(t), Target::Broadcast));
-        self.drop_connections
-            .insert((Target::Broadcast, Target::Single(t)));
-    }
-
-    fn kill(&mut self, t: ServerId) {
+    pub fn kill(&mut self, t: ServerId) {
         self.down.insert(t);
     }
 
-    fn wrap_with_sender(
-        from: ServerId,
-        msgs: Vec<SendableMessage<u32>>,
-    ) -> Vec<(ServerId, SendableMessage<u32>)> {
-        msgs.into_iter().map(|msg| (from, msg)).collect()
+    pub fn revive(&mut self, t: ServerId) {
+        self.down.remove(&t);
+    }
+
+    fn should_drop(&self, from: ServerId, to: ServerId) -> bool {
+        self.down.contains(&to) || self.drop_connections.contains(&(from, to))
     }
 
     fn tick(&mut self) -> Result<usize> {
@@ -71,7 +64,7 @@ impl TestCluster {
             .values_mut()
             .filter(|peer| !self.down.contains(&peer.id))
             .for_each(|peer| {
-                let new_msgs = Self::wrap_with_sender(peer.id, peer.tick());
+                let new_msgs = wrap_with_sender(peer.id, peer.tick());
                 self.msg_queue.extend(new_msgs);
             });
 
@@ -80,17 +73,24 @@ impl TestCluster {
         let messages_to_send: Vec<(ServerId, SendableMessage<u32>)> =
             self.msg_queue.drain(..).collect();
         messages_to_send.iter().for_each(|(from, msg)| match msg {
-            (t @ Target::Single(target), rpc) => {
-                // get target peer, return an error if its not found
-                let peer = self.peers.get_mut(&target).expect("peer not found");
-                let new_msgs = Self::wrap_with_sender(peer.id, peer.receive_rpc(&rpc));
-                self.msg_queue.extend(new_msgs);
+            (Target::Single(to), rpc) => {
+                if !self.should_drop(from.to_owned(), to.to_owned()) {
+                    // get target peer, return an error if its not found
+                    let peer = self.peers.get_mut(&to).expect("peer not found");
+                    let new_msgs = wrap_with_sender(peer.id, peer.receive_rpc(&rpc));
+                    self.msg_queue.extend(new_msgs);
+                }
             }
             (Target::Broadcast, rpc) => {
-                // broadcast this message to all peers
                 self.peers
                     .values_mut()
-                    .map(|peer| Self::wrap_with_sender(peer.id, peer.receive_rpc(&rpc)))
+                    .filter(|peer| {
+                        let to = peer.id;
+                        let should_drop = self.down.contains(&to)
+                            || self.drop_connections.contains(&(from.to_owned(), to));
+                        !should_drop
+                    })
+                    .map(|peer| wrap_with_sender(peer.id, peer.receive_rpc(&rpc)))
                     .for_each(|new_msgs| self.msg_queue.extend(new_msgs));
             }
         });
@@ -143,8 +143,13 @@ impl TestCluster {
         self
     }
 
-    pub fn has_leader(&self) -> bool {
-        self.peers.values().any(|peer| peer.is_leader())
+    pub fn has_n_leaders(&self, n: usize) -> bool {
+        self.peers
+            .values()
+            .filter(|peer| peer.is_leader())
+            .collect::<Vec<_>>()
+            .len()
+            == n
     }
 
     pub fn has_candidate(&self) -> bool {
@@ -154,4 +159,25 @@ impl TestCluster {
     pub fn get_leader(&self) -> Option<&RaftServer<u32, u32>> {
         self.peers.values().filter(|peer| peer.is_leader()).last()
     }
+
+    pub fn leader_term(&self) -> Term {
+        self.get_leader().unwrap().current_term
+    }
+
+    pub fn term_consensus(&self) -> bool {
+        let l_term = self.leader_term();
+        self.peers
+            .values()
+            .filter(|peer| peer.current_term != l_term)
+            .collect::<Vec<_>>()
+            .len()
+            == 0
+    }
+}
+
+fn wrap_with_sender(
+    from: ServerId,
+    msgs: Vec<SendableMessage<u32>>,
+) -> Vec<(ServerId, SendableMessage<u32>)> {
+    msgs.into_iter().map(|msg| (from, msg)).collect()
 }
