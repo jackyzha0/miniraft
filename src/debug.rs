@@ -61,11 +61,7 @@ pub fn colour_server(id: &ServerId) -> String {
 
 /// Helper function to pretty print a [`Term`]
 pub fn colour_term(term: Term) -> String {
-    format!(" Term {} ", term)
-        .bold()
-        .black()
-        .on_white()
-        .to_string()
+    format!(" Term {} ", term).black().on_white().to_string()
 }
 
 /// Helper function to pretty print a boolean
@@ -80,12 +76,23 @@ pub fn colour_bool(b: bool) -> String {
 
 /// Helper function to pretty print a message at the corresponding log [`Level`]
 pub fn log(id: &ServerId, msg: String, level: Level) {
-    let fmt_msg = format!("{} {}{}", colour_server(id), level, msg.dimmed());
+    let fmt_msg = format!("{} {}{}", colour_server(id), level, msg);
     match level {
         Level::Overview => info!("{}", fmt_msg),
         Level::Requests => debug!("{}", fmt_msg),
         Level::Trace => trace!("{}", fmt_msg),
     }
+}
+
+/// Helper function to log a test check
+pub fn assertion(msg: String) {
+    let fmt_msg = format!(
+        "{} {}{}",
+        "   TEST   ".black().on_yellow(),
+        Level::Overview,
+        msg
+    );
+    info!("{}", fmt_msg);
 }
 
 /// Internal debug message to dump contents of entries and state
@@ -134,13 +141,13 @@ pub fn debug_log<T: fmt::Debug>(
                 }
             }
             AnnotationType::Span(start, end) => {
-                if end - start == 0 {
+                if end - start <= 0 {
                     format!("|  {msg}")
                 } else {
                     let pre_padding = " ".repeat(9 * (log_offset + start));
                     let applied_padding = "~~~~~~~~~"
                         .repeat(end - start)
-                        .get(1..(9 * (end - start - 4)))
+                        .get(1..(9 * (end - start) - 4))
                         .unwrap()
                         .to_string();
                     format!("{pre_padding}|{applied_padding}|  {msg}")
@@ -309,7 +316,6 @@ impl Logger {
         } else {
             " Follower ".on_truecolor(140, 140, 140)
         }
-        .bold()
         .black()
         .to_string();
         log(

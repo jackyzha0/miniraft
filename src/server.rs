@@ -230,13 +230,11 @@ where
             self.current_term = new_term;
         }
         self.voted_for = None;
-        if !self.is_follower() {
-            Logger::state_update(&self);
-        }
         self.leadership_state = RaftLeadershipState::Follower(FollowerState {
             leader: None, // as we are in an election
             election_time: self.random_election_time(),
         });
+        Logger::state_update(&self);
     }
 
     /// Calculate quorum of current set of peers.
@@ -308,7 +306,7 @@ where
                     .get(target)
                     .unwrap_or_else(|| panic!("target={} is not a follower", target))
                     .sent_up_to;
-                let prefix_term = if self.log.entries.len() > 0 {
+                let prefix_term = if prefix_len > 0 {
                     self.log.entries.get(prefix_len - 1).unwrap().term
                 } else {
                     0
@@ -467,7 +465,7 @@ where
                     self.reset_to_follower(req.leader_term);
                     self.rpc_append_request(req)
                 } else {
-                    // otherwise just do nothing, only followers should response to
+                    // otherwise just do nothing, only followers should respond to
                     // append_request RPCs
                     vec![]
                 }
@@ -505,10 +503,15 @@ where
                 };
 
                 // send response
+                let ack_idx = if success {
+                    req.leader_last_log_idx + req.entries.len()
+                } else {
+                    0
+                };
                 let rpc = RPC::AppendResponse(AppendResponse {
                     ok: success,
                     term: self.current_term,
-                    ack_idx: self.log.entries.len(),
+                    ack_idx,
                     follower_id: self.id,
                 });
                 vec![(Target::Single(req.leader_id), rpc)]

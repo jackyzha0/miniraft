@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use miniraft::{
-    debug::init_logger,
+    debug::{assertion, colour_server, colour_term, init_logger},
     log::{App, Log, LogEntry},
     rpc::{SendableMessage, Target},
     server::{RaftConfig, RaftServer, ServerId, Term},
@@ -15,7 +15,7 @@ use rand_chacha::ChaCha8Rng;
 
 pub const DEFAULT_CFG: RaftConfig = RaftConfig {
     election_timeout: 10,
-    election_timeout_jitter: 4,
+    election_timeout_jitter: 3,
     heartbeat_interval: 5,
 };
 
@@ -104,6 +104,11 @@ impl TestCluster {
             }
         });
 
+        assertion(format!(
+            "ticked cluster (and transported {} messages)",
+            num_messages
+        ));
+
         Ok(num_messages)
     }
 
@@ -168,15 +173,63 @@ impl TestCluster {
         self.peers.values().filter(|peer| peer.is_leader()).last()
     }
 
+    pub fn get_leader_mut(&mut self) -> Option<&mut RaftServer<u32, u32>> {
+        self.peers
+            .values_mut()
+            .filter(|peer| peer.is_leader())
+            .last()
+    }
+
     pub fn leader_term(&self) -> Term {
         self.get_leader().unwrap().current_term
     }
 
     pub fn term_consensus(&self) -> bool {
+        let l = self.get_leader().unwrap().id;
         let l_term = self.leader_term();
+        assertion(format!(
+            "current term of leader {} is {}",
+            colour_server(&l),
+            colour_term(l_term)
+        ));
+
         self.peers
             .values()
             .filter(|peer| peer.current_term != l_term)
+            .map(|peer| {
+                assertion(format!(
+                    "mismatched term: {} is at current {}",
+                    colour_server(&peer.id),
+                    colour_term(peer.current_term)
+                ));
+                peer
+            })
+            .collect::<Vec<_>>()
+            .len()
+            == 0
+    }
+
+    pub fn state_consensus(&self) -> bool {
+        let l = self.get_leader().unwrap().id;
+        let l_state = self.peers.get(&0).unwrap().log.app.get_state();
+
+        assertion(format!(
+            "current state of leader {} is {}",
+            colour_server(&l),
+            l_state
+        ));
+
+        self.peers
+            .values()
+            .filter(|peer| peer.log.app.get_state() != l_state)
+            .map(|peer| {
+                assertion(format!(
+                    "mismatched state: {} has state {}",
+                    colour_server(&peer.id),
+                    peer.log.app.get_state()
+                ));
+                peer
+            })
             .collect::<Vec<_>>()
             .len()
             == 0

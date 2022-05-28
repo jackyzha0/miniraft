@@ -10,5 +10,5 @@ of Raft.
 
 This project was created as an exercise in implementing and learning about distributed systems. **Do NOT use this in production.**
 
-- [Crate Documentation](https://jzhao.xyz/miniraft)
+- [Crate Documentation](https://jzhao.xyz/miniraft/miniraft)
 - [Specification](https://raft.github.io/raft.pdf)
