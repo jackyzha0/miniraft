@@ -13,6 +13,15 @@ use miniraft::{
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
+pub const DEFAULT_CFG: RaftConfig = RaftConfig {
+    election_timeout: 10,
+    election_timeout_jitter: 4,
+    heartbeat_interval: 5,
+};
+
+pub const MAX_WAIT: u32 = DEFAULT_CFG.election_timeout + DEFAULT_CFG.election_timeout_jitter;
+pub const MAX_TICKS: u32 = 1_000;
+
 pub struct CountingApp {
     state: u32,
 }

@@ -270,8 +270,13 @@ where
                     data: msg,
                 });
 
-                // replicate our log to followers
-                self.replicate_log(Target::Broadcast);
+                if self.peers.len() == 0 {
+                    // single cluster, we can just try to commit these
+                    self.commit_log_entries();
+                } else {
+                    // replicate our log to followers
+                    self.replicate_log(Target::Broadcast);
+                }
                 Ok(())
             }
             _ => {

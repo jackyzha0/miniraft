@@ -5,15 +5,6 @@ use std::collections::BTreeMap;
 use common::*;
 use miniraft::server::{NodeReplicationState, RaftConfig, ServerId};
 
-const DEFAULT_CFG: RaftConfig = RaftConfig {
-    election_timeout: 10,
-    election_timeout_jitter: 4,
-    heartbeat_interval: 5,
-};
-
-const MAX_WAIT: u32 = DEFAULT_CFG.election_timeout + DEFAULT_CFG.election_timeout_jitter;
-const MAX_TICKS: u32 = 1_000;
-
 #[test]
 fn trivial_case_one_server_remains_leader() {
     let mut cluster = TestCluster::new(1, 0, DEFAULT_CFG);
