@@ -1,0 +1,19 @@
+name: test
+on: [push]
+
+defaults:
+  run:
+    shell: bash
+jobs:
+  build-and-test-release:
+    name: build-and-test-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: cargo build --release
+        run:  cargo build --release --verbose
+
+      - name: cargo test --release
+        run:  cargo test --release --verbose

@@ -1,0 +1,28 @@
+name: deploy 
+on:
+  push:
+    branches:
+      - master
+
+defaults:
+  run:
+    shell: bash
+jobs:
+  gh-pages:
+    name:    gh-pages
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: cargo doc
+        run:  cargo doc --verbose --lib --no-deps
+
+      - name: force push docs to gh-pages branch
+        run: |
+          git config user.name "GitHub Pages Documentation Deploy"
+          git config user.email "n/a"
+          mv target/doc/ docs/
+          git add docs
+          git commit -m "render rustdocs"
+          git push -f origin HEAD:gh-pages
