@@ -12,8 +12,9 @@ jobs:
       - name: checkout
         uses: actions/checkout@v2
 
-      - name: cargo build --release
-        run:  cargo build --release --verbose
+      - name: cargo build
+        run:  cargo build --verbose
 
-      - name: cargo test --release
-        run:  cargo test --release --verbose
+      - name: cargo test 
+        run:  RUST_LOG=trace cargo test -- --test-threads 1 --color always
+
