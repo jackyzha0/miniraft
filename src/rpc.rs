@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter, Result};
 
-use crate::log::{LogEntry, LogIndex};
-use crate::server::{ServerId, Term};
+use crate::log::*;
+use crate::server::*;
 
 /// A message can be either targeted at a single server or to everyone
 pub type SendableMessage<T> = (Target, RPC<T>);
@@ -9,15 +9,21 @@ pub type SendableMessage<T> = (Target, RPC<T>);
 /// Whether to send a message to everyone or just a single node
 #[derive(Eq, PartialEq, PartialOrd, Ord, Clone, Copy)]
 pub enum Target {
+    /// A single server
     Single(ServerId),
+    /// To everyone
     Broadcast,
 }
 
 /// A Raft RPC request
 pub enum RPC<T> {
+    /// Candidate requesting to become leader
     VoteRequest(VoteRequest),
-    AppendRequest(AppendRequest<T>),
+    /// Response to [`VoteRequest`]
     VoteResponse(VoteResponse),
+    /// Leader heartbeat/appending entries to followers
+    AppendRequest(AppendRequest<T>),
+    /// Response to [`AppendRequest`]
     AppendResponse(AppendResponse),
 }
 
@@ -52,9 +58,9 @@ pub struct AppendRequest<T> {
     pub leader_id: ServerId,
     /// Log index immediately preceding index of next element in [`entries`](Self::entries)
     pub leader_last_log_idx: LogIndex,
-    /// Term of [`leader_last_log_idx`](Self::prev_entries_idx)
+    /// Term of [`leader_last_log_idx`](Self::leader_last_log_idx)
     pub leader_last_log_term: Term,
-    /// Leader's [`commit_idx`](Log::commit_idx)
+    /// Leader's [`committed_len`](Log::committed_len)
     pub leader_commit: LogIndex,
     /// A list of consecutive log entries to append to follower
     pub entries: Vec<LogEntry<T>>,

@@ -3,3 +3,6 @@ test:
 
 test-debug:
 	RUST_LOG=trace cargo test -- --test-threads 1 --color always
+
+docs:
+	cargo doc --open

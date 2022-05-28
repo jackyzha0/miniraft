@@ -51,6 +51,7 @@ pub enum RaftLeadershipState {
     Leader(LeaderState),
 }
 
+/// [`Follower`](RaftLeadershipState::Follower) specific volatile state
 pub struct FollowerState {
     /// Ticks left to start an election if not reset by activity/heartbeat
     election_time: Ticks,
@@ -58,6 +59,7 @@ pub struct FollowerState {
     leader: Option<ServerId>,
 }
 
+/// [`Candidate`](RaftLeadershipState::Candidate) specific volatile state
 pub struct CandidateState {
     /// Ticks left to start an election if quorum is not reached
     election_time: Ticks,
@@ -65,6 +67,7 @@ pub struct CandidateState {
     votes_received: BTreeSet<ServerId>,
 }
 
+/// [`Leader`](RaftLeadershipState::Leader) specific volatile state
 pub struct LeaderState {
     /// Track state about followers to figure out what to send them next
     followers: BTreeMap<ServerId, NodeReplicationState>,
@@ -117,6 +120,10 @@ impl<T, S> RaftServer<T, S>
 where
     T: Clone + Debug,
 {
+    /// Create a new Raft node with a given ID. Caller is responsible for
+    /// ensuring it is unique.
+    /// Initialize with all peers in the cluster along with an [`App`] that runs over
+    /// the event log to arrive at a state.
     pub fn new(
         id: ServerId,
         peers: BTreeSet<ServerId>,
@@ -251,6 +258,8 @@ where
         Logger::outgoing_rpcs(&self, msgs)
     }
 
+    /// Public interface for clients to request adding log entries to the cluster.
+    /// Will fail if the node it is called on a non-[`Leader`](RaftLeadershipState::Leader) node
     pub fn client_request(&mut self, msg: T) -> Result<()> {
         Logger::client_request(&self);
         match &mut self.leadership_state {
@@ -414,6 +423,7 @@ where
         vec![]
     }
 
+    /// Manually promote node to leader. Do not call during normal operation.
     pub fn promote_to_leader(
         &mut self,
         followers: BTreeMap<ServerId, NodeReplicationState>,
@@ -587,7 +597,8 @@ where
         }
     }
 
-    /// Logging helpers
+    /// Logging helpers ///
+    /// Whether current node is a [`Leader`](RaftLeadershipState::Leader)
     pub fn is_leader(&self) -> bool {
         match self.leadership_state {
             RaftLeadershipState::Leader(_) => true,
@@ -595,6 +606,7 @@ where
         }
     }
 
+    /// Whether current node is a [`Candidate`](RaftLeadershipState::Candidate)
     pub fn is_candidate(&self) -> bool {
         match self.leadership_state {
             RaftLeadershipState::Candidate(_) => true,
@@ -602,6 +614,7 @@ where
         }
     }
 
+    /// Whether current node is a [`Follower`](RaftLeadershipState::Follower)
     pub fn is_follower(&self) -> bool {
         match self.leadership_state {
             RaftLeadershipState::Follower(_) => true,

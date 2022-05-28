@@ -22,6 +22,7 @@ pub struct LogEntry<T> {
 
 /// A collection of LogEntries
 pub struct Log<T, S> {
+    /// Log entries
     pub entries: Vec<LogEntry<T>>,
 
     /// How much of the log has been considered committed.
@@ -37,6 +38,7 @@ pub struct Log<T, S> {
     /// State machine
     pub app: Box<dyn App<T, S>>,
 
+    /// [`ServerId`] of our parent for pretty printing documentation
     pub parent_id: ServerId,
 }
 
@@ -142,6 +144,10 @@ where
 
 /// Describes a state machine that is updated bassed off of a feed of [`LogEntry`]
 pub trait App<T, S> {
+    /// Function that mutates the application state depending on the newest log entry.
+    /// Raft guarantees that if the transition function is called on a [`LogEntry`], it is
+    /// considered applied (meaning it won't be re-run or removed).
     fn transition_fn(&mut self, entry: &LogEntry<T>);
+    /// Return the current state of the application
     fn get_state(&self) -> S;
 }

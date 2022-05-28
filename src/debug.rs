@@ -1,4 +1,3 @@
-/// Crate for making pretty looking outputs for testing and debugging
 use crate::{
     log::{Log, LogEntry, LogIndex},
     rpc::{AppendRequest, AppendResponse, SendableMessage, Target, VoteRequest, VoteResponse, RPC},
@@ -11,12 +10,13 @@ use log::{debug, info, trace};
 use random_color::{Luminosity, RandomColor};
 use std::fmt::Debug;
 
+/// Level of logging
 pub enum Level {
-    // State transitions + RPCs
+    /// State transitions + RPCs
     Overview,
-    // + function calls
+    /// + function calls
     Requests,
-    // inner function workings
+    /// inner function workings
     Trace,
 }
 
@@ -34,6 +34,7 @@ impl fmt::Display for Level {
     }
 }
 
+/// Initialize the logger (default uses microseconds)
 pub fn init_logger() {
     println!("");
     let _ = env_logger::builder()
@@ -46,6 +47,7 @@ pub fn init_logger() {
         .try_init();
 }
 
+/// Helper function to pretty print a [`ServerId`] with a unique colour
 pub fn colour_server(id: &ServerId) -> String {
     let [r, g, b] = RandomColor::new()
         .luminosity(Luminosity::Light)
@@ -57,6 +59,7 @@ pub fn colour_server(id: &ServerId) -> String {
         .to_string()
 }
 
+/// Helper function to pretty print a [`Term`]
 pub fn colour_term(term: Term) -> String {
     format!(" Term {} ", term)
         .bold()
@@ -65,6 +68,7 @@ pub fn colour_term(term: Term) -> String {
         .to_string()
 }
 
+/// Helper function to pretty print a boolean
 pub fn colour_bool(b: bool) -> String {
     match b {
         true => "ok".green(),
@@ -74,6 +78,7 @@ pub fn colour_bool(b: bool) -> String {
     .to_string()
 }
 
+/// Helper function to pretty print a message at the corresponding log [`Level`]
 pub fn log(id: &ServerId, msg: String, level: Level) {
     let fmt_msg = format!("{} {}{}", colour_server(id), level, msg.dimmed());
     match level {
@@ -85,11 +90,18 @@ pub fn log(id: &ServerId, msg: String, level: Level) {
 
 /// Internal debug message to dump contents of entries and state
 pub enum AnnotationType {
+    /// Mark a specific log index
     Index(usize),
+    /// Mark a length of the log starting from the beginning
     Length(usize),
+    /// Mark a section of the log
     Span(usize, usize),
 }
+
+/// A tuple representing an annotation message and its [`AnnotationType`]
 pub type Annotation = (AnnotationType, &'static str);
+
+/// Pretty print a set of [`Annotations`](Annotation) over a vector of [`LogEntries`](LogEntry)
 pub fn debug_log<T: fmt::Debug>(
     entries: &Vec<LogEntry<T>>,
     annotations: Vec<Annotation>,
@@ -141,8 +153,10 @@ pub fn debug_log<T: fmt::Debug>(
     format!("\n{}{}", first_line, annotation_lines)
 }
 
+/// Wrapper struct that contains methods for logging specific program flows in Raft
 pub struct Logger {}
 impl Logger {
+    /// called when a node receives a request to append entries
     pub fn append_entries_recv<T: Debug, S>(
         log_ref: &Log<T, S>,
         prefix_idx: LogIndex,
@@ -167,6 +181,7 @@ impl Logger {
         log(&log_ref.parent_id, msg, Level::Requests)
     }
 
+    /// called on potential log conflict when appending entries
     pub fn log_potential_conflict<T: Debug, S>(
         log_ref: &Log<T, S>,
         their_entries: &Vec<LogEntry<T>>,
@@ -196,6 +211,7 @@ impl Logger {
         );
     }
 
+    /// detected a term conflict, log details about truncation
     pub fn log_term_conflict<T: Debug, S>(log_ref: &Log<T, S>) {
         log(
             &log_ref.parent_id,
@@ -207,6 +223,7 @@ impl Logger {
         );
     }
 
+    /// details about actually appending to the log
     pub fn log_append<T: Debug, S>(log_ref: &Log<T, S>, start: LogIndex) {
         log(
             &log_ref.parent_id,
@@ -219,6 +236,7 @@ impl Logger {
         );
     }
 
+    /// details about applying a number of log entries to the state machine
     pub fn log_apply<T: Debug, S>(log_ref: &Log<T, S>, leader_commit_len: LogIndex) {
         log(
             &log_ref.parent_id,
@@ -243,6 +261,7 @@ impl Logger {
         )
     }
 
+    /// called when delivering a single log entry to the application
     pub fn log_deliver_recv<T: Debug, S>(log_ref: &Log<T, S>) {
         log(
             &log_ref.parent_id,
@@ -255,6 +274,7 @@ impl Logger {
         );
     }
 
+    /// called when log entries are done being applied to state machine (application)
     pub fn log_deliver_apply<T: Debug, S>(log_ref: &Log<T, S>) {
         log(
             &log_ref.parent_id,
@@ -270,6 +290,7 @@ impl Logger {
         );
     }
 
+    /// initializing a server
     pub fn server_init<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>) {
         log(
             &raft_ref.id,
@@ -279,6 +300,7 @@ impl Logger {
         Self::state_update(raft_ref);
     }
 
+    /// log a leadership state transition
     pub fn state_update<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>) {
         let state_str = if raft_ref.is_leader() {
             " Leader ".on_blue()
@@ -297,6 +319,7 @@ impl Logger {
         );
     }
 
+    /// log election states upon winning
     pub fn won_election<T: Debug + Clone, S>(
         raft_ref: &RaftServer<T, S>,
         num_votes: usize,
@@ -319,6 +342,7 @@ impl Logger {
         );
     }
 
+    /// leader sending heartbeat to followers
     pub fn send_heartbeat<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>) {
         log(
             &raft_ref.id,
@@ -327,6 +351,7 @@ impl Logger {
         );
     }
 
+    /// candidate/follower election timeout reached
     pub fn election_timer_expired<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>) {
         log(
             &raft_ref.id,
@@ -338,6 +363,7 @@ impl Logger {
         );
     }
 
+    /// log single outgoing rpc request (including type and target)
     pub fn outgoing_rpcs<T: Debug + Clone, S>(
         raft_ref: &RaftServer<T, S>,
         msgs: Vec<SendableMessage<T>>,
@@ -357,6 +383,7 @@ impl Logger {
         msgs
     }
 
+    /// rpc request pre-req: ensure term matches before continuing
     pub fn check_matching_term<T>(id: &ServerId, req: &AppendRequest<T>, current_term: Term) {
         log(
             id,
@@ -368,6 +395,7 @@ impl Logger {
         );
     }
 
+    /// log when a term change/update has occurred
     pub fn bumping_term<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, new_term: Term) {
         log(
             &raft_ref.id,
@@ -380,10 +408,12 @@ impl Logger {
         );
     }
 
+    /// log incoming rpc request (including type and received from)
     pub fn receive_rpc<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, rpc: &RPC<T>) {
         log(&raft_ref.id, format!("<- {rpc}"), Level::Overview);
     }
 
+    /// log client API calls
     pub fn client_request<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>) {
         log(
             &raft_ref.id,
@@ -392,6 +422,7 @@ impl Logger {
         );
     }
 
+    /// log when leader prepares to replicate log entries to followers
     pub fn replicate_entries<T: Debug + Clone, S>(
         raft_ref: &RaftServer<T, S>,
         entries: &Vec<LogEntry<T>>,
@@ -424,6 +455,7 @@ impl Logger {
         }
     }
 
+    /// follower receiving a request from a candidate to vote for them
     pub fn rpc_vote_request<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, req: &VoteRequest) {
         log(
             &raft_ref.id,
@@ -435,6 +467,7 @@ impl Logger {
         );
     }
 
+    /// explain follower decision making for whether to vote for candidate
     pub fn rpc_vote_result<T: Debug + Clone, S>(
         raft_ref: &RaftServer<T, S>,
         log_ok: bool,
@@ -454,6 +487,7 @@ impl Logger {
         );
     }
 
+    /// candidate receiving a vote result from a follower
     pub fn rpc_vote_resp<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, res: &VoteResponse) {
         log(
             &raft_ref.id,
@@ -466,6 +500,7 @@ impl Logger {
         );
     }
 
+    /// log decision making process for candidate deciding whether result from follower is valid
     pub fn vote_count(id: &ServerId, res: &VoteResponse, up_to_date: bool) {
         log(
             id,
@@ -479,6 +514,7 @@ impl Logger {
         );
     }
 
+    /// log total votes for candidate
     pub fn total_vote_count(id: &ServerId, total: usize, quorum: usize) {
         log(
             id,
@@ -487,6 +523,7 @@ impl Logger {
         );
     }
 
+    /// log adding a follower under a leader
     pub fn added_follower<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, votee: &ServerId) {
         log(
             &raft_ref.id,
@@ -495,6 +532,7 @@ impl Logger {
         )
     }
 
+    /// log when follower receives a request to append log entries from leader
     pub fn rpc_append_request<T: Debug + Clone, S>(
         raft_ref: &RaftServer<T, S>,
         req: &AppendRequest<T>,
@@ -509,6 +547,7 @@ impl Logger {
         );
     }
 
+    /// checking for potential log conflict before appending
     pub fn append_conflict_check<T: Debug + Clone, S>(
         raft_ref: &RaftServer<T, S>,
         req: &AppendRequest<T>,
@@ -534,6 +573,7 @@ impl Logger {
         }
     }
 
+    /// log follower appending entries from leader
     pub fn append_entries<T: Debug + Clone, S>(
         raft_ref: &RaftServer<T, S>,
         prefix_ok: bool,
@@ -550,6 +590,7 @@ impl Logger {
         ), Level::Trace);
     }
 
+    /// log leader receiving response from follower re: append_entries
     pub fn append_response<T: Debug + Clone, S>(raft_ref: &RaftServer<T, S>, res: &AppendResponse) {
         log(
             &raft_ref.id,
@@ -561,6 +602,7 @@ impl Logger {
         );
     }
 
+    /// log decision making process for leader when updating its replication state for a follower
     pub fn process_append_response(
         id: &ServerId,
         res: &AppendResponse,
@@ -596,6 +638,7 @@ impl Logger {
         log(id, msg, Level::Trace)
     }
 
+    /// log decision making process on a leader about whether to commit entries
     pub fn commit_entry(id: &ServerId, commit_len: LogIndex, acks: usize, quorum_size: usize) {
         log(id, format!(
             "commit entry at index ({}): {} because\n1) total of {} acks for that index >= quorum size ({})",
