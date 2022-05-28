@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Log","A collection of LogEntries"],["LogEntry","A single log entry"]],"trait":[["App","Describes a state machine that is updated bassed off of a feed of [`LogEntry`]"]],"type":[["LogIndex","Type alias for indexing into the [`Log`]"]]});
