@@ -570,64 +570,50 @@ where
     /// When a log entry is committed, its message is delivered to the application.
     fn commit_log_entries(&mut self) {
         let quorum_size = self.quorum_size();
-        match &mut self.leadership_state {
-            RaftLeadershipState::Leader(state) => {
-                // construct a collection of all nodes in system
-                let mut all_nodes: Vec<&ServerId> = self.peers.iter().collect();
-                all_nodes.push(&self.id);
+        if let RaftLeadershipState::Leader(state) = &mut self.leadership_state {
+            // construct a collection of all nodes in system
+            let mut all_nodes: Vec<&ServerId> = self.peers.iter().collect();
+            all_nodes.push(&self.id);
 
-                // repeat until we have committed all entries
-                while self.log.committed_len < self.log.entries.len() {
-                    // count all nodes which have acked past what our current commit_len is
-                    // +1 is to include ourselves!
-                    let acks = state
-                        .followers
-                        .values()
-                        .filter(|follower_state| {
-                            follower_state.acked_up_to > self.log.committed_len
-                        })
-                        .count()
-                        + 1;
+            // repeat until we have committed all entries
+            while self.log.committed_len < self.log.entries.len() {
+                // count all nodes which have acked past what our current commit_len is
+                // +1 is to include ourselves!
+                let acks = state
+                    .followers
+                    .values()
+                    .filter(|follower_state| follower_state.acked_up_to > self.log.committed_len)
+                    .count()
+                    + 1;
 
-                    Logger::commit_entry(&self.id, self.log.committed_len, acks, quorum_size);
-                    if acks >= quorum_size {
-                        // hit quorum! deliver last log to application and bump commit_len
-                        self.log.deliver_msg();
-                        self.log.committed_len += 1;
-                    } else {
-                        // exit early, nothing we can do except wait for more nodes to acknowledge
-                        // the entries we told them to add
-                        break;
-                    }
+                Logger::commit_entry(&self.id, self.log.committed_len, acks, quorum_size);
+                if acks >= quorum_size {
+                    // hit quorum! deliver last log to application and bump commit_len
+                    self.log.deliver_msg();
+                    self.log.committed_len += 1;
+                } else {
+                    // exit early, nothing we can do except wait for more nodes to acknowledge
+                    // the entries we told them to add
+                    break;
                 }
             }
-            _ => {}
         }
     }
 
     /// Logging helpers ///
     /// Whether current node is a [`Leader`](RaftLeadershipState::Leader)
     pub fn is_leader(&self) -> bool {
-        match self.leadership_state {
-            RaftLeadershipState::Leader(_) => true,
-            _ => false,
-        }
+        matches!(self.leadership_state, RaftLeadershipState::Leader(_))
     }
 
     /// Whether current node is a [`Candidate`](RaftLeadershipState::Candidate)
     pub fn is_candidate(&self) -> bool {
-        match self.leadership_state {
-            RaftLeadershipState::Candidate(_) => true,
-            _ => false,
-        }
+        matches!(self.leadership_state, RaftLeadershipState::Candidate(_))
     }
 
     /// Whether current node is a [`Follower`](RaftLeadershipState::Follower)
     pub fn is_follower(&self) -> bool {
-        match self.leadership_state {
-            RaftLeadershipState::Follower(_) => true,
-            _ => false,
-        }
+        matches!(self.leadership_state, RaftLeadershipState::Follower(_))
     }
 }
 

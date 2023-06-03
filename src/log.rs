@@ -31,6 +31,7 @@ pub struct Log<T, S> {
     /// Initialized to 0 as no entries are committed.
     /// Increases monotonically.
     pub committed_len: LogIndex,
+
     /// How much of the log has been applied to the state machine.
     /// Initialized to 0, increases monotonically.
     pub applied_len: LogIndex,
@@ -59,11 +60,7 @@ where
 
     /// Fetch the most recent term we have recorded in the log
     pub fn last_term(&self) -> Term {
-        if self.entries.len() > 0 {
-            self.entries.last().unwrap().term
-        } else {
-            0
-        }
+        self.entries.last().map(|x| x.term).unwrap_or(0)
     }
 
     /// Get index of the last element
@@ -148,6 +145,7 @@ pub trait App<T, S> {
     /// Raft guarantees that if the transition function is called on a [`LogEntry`], it is
     /// considered applied (meaning it won't be re-run or removed).
     fn transition_fn(&mut self, entry: &LogEntry<T>);
+
     /// Return the current state of the application
     fn get_state(&self) -> S;
 }
