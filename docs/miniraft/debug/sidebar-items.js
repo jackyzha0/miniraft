@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AnnotationType","Level"],"fn":["assertion","colour_bool","colour_server","colour_term","debug_log","init_logger","log"],"struct":["Logger"],"type":["Annotation"]};
