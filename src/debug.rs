@@ -637,7 +637,7 @@ impl Logger {
             format!(
                 "error, decrement sent_up_to from {} -> {} and try again",
                 follower_state.sent_up_to,
-                follower_state.sent_up_to - 1,
+                follower_state.sent_up_to.saturating_sub(1),
             )
         };
 
