@@ -35,9 +35,10 @@ fn appending_to_three_logs_is_ok() {
     assert_eq!(lead.log.applied_len, 0);
     assert_eq!(lead.log.app.get_state(), 0);
 
-    // three ticks, one to propagate request another to propagate response
-    // and another to propagate request from leader with updated commited_len
-    cluster.tick_by(3);
+    // entries propagate on the next heartbeat (up to one heartbeat_interval
+    // away), the leader commits on the acks, and the following heartbeat
+    // propagates the updated commited_len to followers
+    cluster.tick_by(2 * DEFAULT_CFG.heartbeat_interval + 1);
     lead = cluster.get_leader_mut().unwrap();
 
     assert_eq!(lead.log.entries.len(), 2);
@@ -177,9 +178,11 @@ fn dead_node_catches_up_after_reviving() {
     assert_eq!(cluster.get_leader().unwrap().log.app.get_state(), 10);
     assert!(!cluster.state_consensus());
 
-    // revive node
+    // revive node. its election timer was frozen mid-countdown, so it may
+    // time out before the next heartbeat arrives and force a round of
+    // disruptive elections (miniraft has no PreVote) before it catches up
     cluster.revive(follower_node_id);
-    cluster.tick_by(MAX_WAIT);
+    cluster.tick_by(4 * MAX_WAIT);
     // ensure still consensus
     assert_eq!(cluster.get_leader().unwrap().log.app.get_state(), 10);
     assert!(cluster.state_consensus());

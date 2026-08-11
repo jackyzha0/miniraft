@@ -212,6 +212,8 @@ where
             Leader(state) => {
                 state.heartbeat_timeout = state.heartbeat_timeout.saturating_sub(1);
                 if state.heartbeat_timeout == 0 {
+                    // rearm timer for the next heartbeat
+                    state.heartbeat_timeout = self.config.heartbeat_interval;
                     Logger::send_heartbeat(&self);
                     let msgs = self.replicate_log(Target::Broadcast);
                     return Logger::outgoing_rpcs(&self, msgs);
@@ -480,14 +482,16 @@ where
                     // check if we have the messages that the leader is claiming we have
                     let prefix_len = req.leader_last_log_idx;
                     let prefix_ok = self.log.entries.len() >= prefix_len;
+                    // if our log is shorter than the leader's assumed prefix,
+                    // we can't compare terms; reply false so the leader
+                    // backs up and retries with an earlier prefix
                     let last_entry_matches_terms = prefix_len == 0
-                        || (self
+                        || self
                             .log
                             .entries
                             .get(prefix_len - 1)
-                            .expect("invalid leader_last_log_idx")
-                            .term
-                            == req.leader_last_log_term);
+                            .map(|entry| entry.term == req.leader_last_log_term)
+                            .unwrap_or(false);
 
                     Logger::append_entries(&self, prefix_ok, last_entry_matches_terms, prefix_len);
                     if prefix_ok && last_entry_matches_terms {
@@ -547,19 +551,18 @@ where
                     // try to formally commit these entries, no need to respond
                     self.commit_log_entries();
                     return vec![];
-                } else if follower_state.sent_up_to > 0 {
+                } else {
                     // if there's a gap in the log, res.ok is not true!
-                    // reduce what we assume the client has received by one and try again
-
+                    // reduce what we assume the client has received by one and try again.
+                    // failure responses can arrive duplicated or delayed, so sent_up_to
+                    // may already be 0, in which case we just resend the whole log again
                     follower_state.sent_up_to = follower_state.sent_up_to.saturating_sub(1);
                     return self.replicate_log(Target::Single(res.follower_id));
-                } else {
-                    // something is critically wrong
-                    panic!("invalid append_response received: already tried resending whole log and response still fails");
                 }
             } else {
-                // this should never be reached, client should have updated their term when we sent the first response
-                panic!("invalid append_response received: client term should never be behind at this point");
+                // response from an earlier term of ours, delayed or duplicated
+                // by the network. it is stale, ignore it
+                return vec![];
             }
         } else {
             vec![]
@@ -571,30 +574,38 @@ where
     fn commit_log_entries(&mut self) {
         let quorum_size = self.quorum_size();
         if let RaftLeadershipState::Leader(state) = &mut self.leadership_state {
-            // construct a collection of all nodes in system
-            let mut all_nodes: Vec<&ServerId> = self.peers.iter().collect();
-            all_nodes.push(&self.id);
-
-            // repeat until we have committed all entries
-            while self.log.committed_len < self.log.entries.len() {
-                // count all nodes which have acked past what our current commit_len is
+            // find the longest log prefix that a quorum of nodes has acknowledged
+            let mut quorum_len = self.log.entries.len();
+            while quorum_len > self.log.committed_len {
+                // count all nodes which have acked at least this much of the log
                 // +1 is to include ourselves!
                 let acks = state
                     .followers
                     .values()
-                    .filter(|follower_state| follower_state.acked_up_to > self.log.committed_len)
+                    .filter(|follower_state| follower_state.acked_up_to >= quorum_len)
                     .count()
                     + 1;
 
-                Logger::commit_entry(&self.id, self.log.committed_len, acks, quorum_size);
+                Logger::commit_entry(&self.id, quorum_len - 1, acks, quorum_size);
                 if acks >= quorum_size {
-                    // hit quorum! deliver last log to application and bump commit_len
+                    break;
+                }
+                quorum_len -= 1;
+            }
+
+            // never commit entries from *previous* terms by counting replicas
+            // (figure 8 in the raft paper, section 5.4.2)! such an entry could
+            // still be overwritten by a server whose log has a higher last term.
+            // only an entry from our own term is safe to commit this way,
+            // everything before it commits transitively
+            if quorum_len > self.log.committed_len
+                && self.log.entries[quorum_len - 1].term == self.current_term
+            {
+                while self.log.committed_len < quorum_len {
+                    // deliver each newly committed log to the application
+                    // and bump commit_len
                     self.log.deliver_msg();
                     self.log.committed_len += 1;
-                } else {
-                    // exit early, nothing we can do except wait for more nodes to acknowledge
-                    // the entries we told them to add
-                    break;
                 }
             }
         }
