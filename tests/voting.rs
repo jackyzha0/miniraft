@@ -50,12 +50,14 @@ fn no_jitter_never_has_leader() {
 }
 
 #[test]
-fn two_cluster_partition_has_two_leaders() {
+fn two_cluster_partition_has_no_leader() {
+    // a 2-node cluster needs both nodes for a majority, so neither side of
+    // a partition can elect itself: both keep campaigning, nobody leads
     let mut cluster = TestCluster::new(2, 0, DEFAULT_CFG);
     cluster.drop_between(0, 1);
     cluster.tick_by(MAX_WAIT);
-    assert_eq!(cluster.num_leaders(), 2);
-    assert!(!cluster.has_candidate());
+    assert_eq!(cluster.num_leaders(), 0);
+    assert!(cluster.has_candidate());
 }
 
 #[test]

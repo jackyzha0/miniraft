@@ -10,7 +10,6 @@ use rand_core::SeedableRng;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
-    ops::Div,
     vec,
 };
 
@@ -240,10 +239,10 @@ where
     }
 
     /// Calculate quorum of current set of peers.
-    /// quorum = ceil((peers.length + 1)/2)
+    /// quorum = floor(n/2) + 1, a strict majority of the cluster
     pub fn quorum_size(&self) -> usize {
-        // add an extra because self.peers doesn't include self
-        self.peers.len().saturating_add(2).div(2)
+        // peers doesn't include self, so n = peers.len() + 1
+        (self.peers.len() + 1) / 2 + 1
     }
 
     /// Demultiplex incoming RPC to its correct receiver function
