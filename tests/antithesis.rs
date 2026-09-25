@@ -528,8 +528,13 @@ impl Sim {
 /// Run the full scenario for one seed. Returns workload stats, or panics on
 /// the first property violation / crash inside miniraft.
 fn run_scenario(seed: u64) -> Stats {
-    // odd seeds get a 5-node cluster, even seeds a 3-node cluster
-    let n = if seed % 2 == 0 { 3 } else { 5 };
+    // sweep 3, 4 and 5 node clusters: even sizes are where an off-by-one
+    // quorum lets two disjoint majorities elect two leaders in one term
+    let n = match seed % 3 {
+        0 => 3,
+        1 => 5,
+        _ => 4,
+    };
     let mut sim = Sim::new(seed, n);
 
     // phase 1: aggressive fault injection
